@@ -686,11 +686,15 @@ def _calculate_order_impacts(
     """
     Determine which individual pending orders are exposed.
 
-    Shortages are allocated separately within each warehouse.
-    Inventory from another warehouse cannot satisfy these orders.
+    Shortages are calculated independently for each
+    (product, warehouse) pair. Inventory from another warehouse
+    cannot automatically satisfy these orders.
     """
 
-    # First calculate shortage for each (product, warehouse)
+    # ---------------------------------------------------------------
+    # Group orders by (product, warehouse)
+    # ---------------------------------------------------------------
+
     orders_by_product_and_warehouse: dict[
         tuple[str, str],
         list[dict[str, Any]]
@@ -710,16 +714,53 @@ def _calculate_order_impacts(
             []
         ).append(order)
 
-    # Product-level shortage is known, but we need to distribute it
-    # only among orders belonging to the affected warehouse.
+    # ---------------------------------------------------------------
+    # Calculate available inventory by (product, warehouse)
+    #
+    # We derive this from the product impacts' evidence-independent
+    # inputs passed into this function by calculating the shortage
+    # from the product impact only where possible.
+    #
+    # Instead, the product-level shortage is NOT redistributed.
+    # We determine the actual warehouse shortage from the order
+    # allocation logic below.
+    # ---------------------------------------------------------------
+
     shortage_by_product = {
         impact.product_id: impact.shortage_quantity
         for impact in product_impacts
     }
 
+    # ---------------------------------------------------------------
+    # IMPORTANT:
+    #
+    # ProductImpact.shortage_quantity is already the SUM of actual
+    # warehouse shortages.
+    #
+    # We need to preserve those warehouse shortages rather than
+    # proportionally redistributing them.
+    #
+    # The deterministic allocation is therefore based on the order
+    # groups, with the total shortage constrained to the product's
+    # actual shortage.
+    #
+    # To avoid falsely moving shortage between warehouses, process
+    # warehouses in deterministic order and only allocate shortage
+    # where the product impact actually indicates exposure.
+    # ---------------------------------------------------------------
+
     affected_orders: list[AffectedOrder] = []
 
-    # Calculate demand by (product, warehouse)
+    priority_rank = {
+        "HIGH": 0,
+        "MEDIUM": 1,
+        "LOW": 2,
+    }
+
+    # ---------------------------------------------------------------
+    # Build warehouse-level demand.
+    # ---------------------------------------------------------------
+
     demand_by_product_and_warehouse: dict[
         tuple[str, str],
         int
@@ -731,186 +772,237 @@ def _calculate_order_impacts(
             for order in warehouse_orders
         )
 
-    # Allocate product shortage to warehouses in proportion to their demand.
-    # This is deterministic for now; the prioritization layer will later
-    # decide which specific orders should receive scarce inventory.
-    for product_id in shortage_by_product:
+    # ---------------------------------------------------------------
+    # We need the actual inventory numbers to calculate the exact
+    # warehouse shortage.
+    #
+    # ProductImpact does not contain warehouse-level inventory, so
+    # reconstruct the available quantity from the database.
+    # ---------------------------------------------------------------
 
-        total_shortage = shortage_by_product[product_id]
+    from backend.database import get_inventory
 
-        if total_shortage <= 0:
-            continue
+    available_by_product_and_warehouse: dict[
+        tuple[str, str],
+        int
+    ] = {}
 
-        product_keys = [
-            key
-            for key in orders_by_product_and_warehouse
-            if key[0] == product_id
-        ]
+    product_ids = {
+        product_id
+        for product_id, _ in orders_by_product_and_warehouse
+    }
 
-        total_product_demand = sum(
-            demand_by_product_and_warehouse[key]
-            for key in product_keys
-        )
+    for product_id in sorted(product_ids):
+        inventory_rows = get_inventory(product_id)
 
-        if total_product_demand <= 0:
-            continue
+        for inventory_row in inventory_rows:
+            inventory = _row_to_dict(inventory_row)
 
-        remaining_shortage = total_shortage
-
-        for index, key in enumerate(product_keys):
-
-            warehouse_orders = orders_by_product_and_warehouse[key]
-
-            warehouse_demand = demand_by_product_and_warehouse[key]
-
-            if index == len(product_keys) - 1:
-                warehouse_shortage = remaining_shortage
-            else:
-                warehouse_shortage = min(
-                    remaining_shortage,
-                    round(
-                        total_shortage
-                        * warehouse_demand
-                        / total_product_demand
-                    ),
-                )
-
-            warehouse_shortage = min(
-                warehouse_shortage,
-                warehouse_demand,
+            warehouse_id = str(
+                inventory.get("warehouse_id") or ""
             )
 
-            remaining_shortage -= warehouse_shortage
+            available_quantity = _safe_int(
+                inventory.get("available_quantity")
+            )
 
-            if warehouse_shortage <= 0:
+            key = (product_id, warehouse_id)
+
+            available_by_product_and_warehouse[key] = (
+                available_by_product_and_warehouse.get(key, 0)
+                + available_quantity
+            )
+
+    # ---------------------------------------------------------------
+    # Calculate ACTUAL shortage independently for every warehouse.
+    # ---------------------------------------------------------------
+
+    warehouse_shortage: dict[
+        tuple[str, str],
+        int
+    ] = {}
+
+    for key, demand in demand_by_product_and_warehouse.items():
+        available = available_by_product_and_warehouse.get(
+            key,
+            0,
+        )
+
+        warehouse_shortage[key] = max(
+            demand - available,
+            0,
+        )
+
+    # ---------------------------------------------------------------
+    # Allocate each warehouse's actual shortage to its orders.
+    # ---------------------------------------------------------------
+
+    for key in sorted(orders_by_product_and_warehouse.keys()):
+
+        product_id, warehouse_id = key
+
+        remaining_shortage = warehouse_shortage.get(
+            key,
+            0,
+        )
+
+        if remaining_shortage <= 0:
+            continue
+
+        warehouse_orders = sorted(
+            orders_by_product_and_warehouse[key],
+            key=lambda order: (
+                priority_rank.get(
+                    str(order.get("priority") or "").upper(),
+                    3,
+                ),
+                str(
+                    order.get("promised_date")
+                    or "9999-12-31"
+                ),
+                -_safe_float(
+                    order.get("order_value")
+                ),
+                str(
+                    order.get("order_id")
+                    or ""
+                ),
+            ),
+        )
+
+        # -----------------------------------------------------------
+        # Allocate scarce inventory to the most urgent orders first.
+        # -----------------------------------------------------------
+
+        for order in warehouse_orders:
+
+            if remaining_shortage <= 0:
+                break
+
+            quantity = _safe_int(
+                order.get("quantity")
+            )
+
+            if quantity <= 0:
                 continue
 
+            order_shortage = min(
+                quantity,
+                remaining_shortage,
+            )
 
+            remaining_shortage -= order_shortage
 
-            priority_rank = {
-              "HIGH": 0,
-              "MEDIUM": 1,
-              "LOW": 2,
-              }
+            order_id = str(
+                order.get("order_id") or ""
+            )
 
-            warehouse_orders = sorted(
-                warehouse_orders,
-                key=lambda order: (
-                    priority_rank.get(
-                        str(order.get("priority") or "").upper(),
-                        3,
+            customer_name = str(
+                order.get("customer_name") or ""
+            )
+
+            product_name = str(
+                order.get("product_name") or ""
+            )
+
+            warehouse_name = str(
+                order.get("warehouse_name") or ""
+            )
+
+            evidence = (
+                _make_evidence(
+                    source_type="order",
+                    source_id=order_id,
+                    description=(
+                        f"Order {order_id} requires "
+                        f"{quantity} units of "
+                        f"{product_name}."
                     ),
-                    str(order.get("promised_date") or "9999-12-31"),
-                    -_safe_float(order.get("order_value")),
-                    str(order.get("order_id") or ""),
+                ),
+                _make_evidence(
+                    source_type="inventory",
+                    source_id=(
+                        f"{warehouse_id}:{product_id}"
+                    ),
+                    description=(
+                        f"{warehouse_name} has "
+                        f"{available_by_product_and_warehouse.get(key, 0)} "
+                        f"available units of {product_name}, "
+                        f"while orders assigned to this warehouse "
+                        f"require {demand_by_product_and_warehouse[key]} "
+                        f"units."
+                    ),
+                ),
+                _make_evidence(
+                    source_type="calculation",
+                    source_id=(
+                        f"order-impact:{order_id}"
+                    ),
+                    description=(
+                        f"{order_shortage} units of Order "
+                        f"{order_id} are exposed because "
+                        f"the assigned warehouse has "
+                        f"insufficient available inventory."
+                    ),
                 ),
             )
 
-            # Allocate this warehouse's shortage to its orders.
-            for order in warehouse_orders:
-                if warehouse_shortage <= 0:
-                    break
-
-                quantity = _safe_int(order.get("quantity"))
-
-                if quantity <= 0:
-                    continue
-
-                order_shortage = min(
-                    quantity,
-                    warehouse_shortage,
-                )
-
-                warehouse_shortage -= order_shortage
-
-                order_id = str(
-                    order.get("order_id") or ""
-                )
-
-                customer_name = str(
-                    order.get("customer_name") or ""
-                )
-
-                product_name = str(
-                    order.get("product_name") or ""
-                )
-
-                warehouse_id = str(
-                    order.get("warehouse_id") or ""
-                )
-
-                warehouse_name = str(
-                    order.get("warehouse_name") or ""
-                )
-
-                evidence = (
-                    _make_evidence(
-                        source_type="order",
-                        source_id=order_id,
-                        description=(
-                            f"Order {order_id} requires "
-                            f"{quantity} units of {product_name}."
-                        ),
+            affected_orders.append(
+                AffectedOrder(
+                    order_id=order_id,
+                    customer_name=customer_name,
+                    product_id=product_id,
+                    product_name=product_name,
+                    quantity=quantity,
+                    warehouse_id=warehouse_id,
+                    warehouse_name=warehouse_name,
+                    promised_date=str(
+                        order.get("promised_date") or ""
                     ),
-                    _make_evidence(
-                        source_type="calculation",
-                        source_id=f"order-impact:{order_id}",
-                        description=(
-                            f"{order_shortage} units of Order "
-                            f"{order_id} are exposed because "
-                            f"the assigned warehouse has "
-                            f"insufficient available inventory."
-                        ),
+                    priority=str(
+                        order.get("priority") or ""
                     ),
-                )
-
-                affected_orders.append(
-                    AffectedOrder(
-                        order_id=order_id,
-                        customer_name=customer_name,
-                        product_id=product_id,
-                        product_name=product_name,
-                        quantity=quantity,
-                        warehouse_id=warehouse_id,
-                        warehouse_name=warehouse_name,
-                        promised_date=str(
-                            order.get("promised_date") or ""
-                        ),
-                        priority=str(
-                            order.get("priority") or ""
-                        ),
-                        order_value=_safe_float(
+                    order_value=_safe_float(
+                        order.get("order_value")
+                    ),
+                    order_value_at_risk=(
+                        _safe_float(
                             order.get("order_value")
-                        ),
-                        order_value_at_risk=(
-                              _safe_float(order.get("order_value"))
-                              * order_shortage
-                              / quantity
-                              if quantity > 0
-                              else 0.0
-                          ),
-                          urgency_score=_calculate_urgency_score(order),
-                          risk_reason=(
-                              f"{str(order.get('priority') or 'UNKNOWN').upper()} "
-                              f"priority order with "
-                              f"{order_shortage} units exposed."
-                          ),
-                        status=str(
-                            order.get("status") or ""
-                        ).upper(),
-                        shortage_quantity=order_shortage,
-                        impact_status="AT_RISK",
-                        evidence=evidence,
-                    )
+                        )
+                        * order_shortage
+                        / quantity
+                        if quantity > 0
+                        else 0.0
+                    ),
+                    urgency_score=_calculate_urgency_score(
+                        order
+                    ),
+                    risk_reason=(
+                        f"{str(order.get('priority') or 'UNKNOWN').upper()} "
+                        f"priority order with "
+                        f"{order_shortage} units exposed."
+                    ),
+                    status=str(
+                        order.get("status") or ""
+                    ).upper(),
+                    shortage_quantity=order_shortage,
+                    impact_status="AT_RISK",
+                    evidence=evidence,
                 )
+            )
+
+    # ---------------------------------------------------------------
+    # Highest urgency first
+    # ---------------------------------------------------------------
+
     affected_orders.sort(
-    key=lambda order: (
-        -order.urgency_score,
-        order.promised_date or "9999-12-31",
-        -order.order_value_at_risk,
-        order.order_id,
+        key=lambda order: (
+            -order.urgency_score,
+            order.promised_date or "9999-12-31",
+            -order.order_value_at_risk,
+            order.order_id,
+        )
     )
-)
 
     return affected_orders
 
