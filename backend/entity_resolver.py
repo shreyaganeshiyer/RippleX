@@ -1,0 +1,531 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Optional
+
+from backend.database import (
+    get_product_by_name,
+    get_supplier_by_name,
+)
+from backend.disruption_parser import DisruptionEvent
+
+
+# ============================================================
+# Resolution result models
+# ============================================================
+
+@dataclass(frozen=True)
+class EntityMatch:
+    """
+    Result of resolving one entity against our database.
+    """
+
+    input_value: str
+    entity_type: str
+
+    entity_id: Optional[str]
+    entity_name: Optional[str]
+
+    status: str
+    confidence: float
+
+    reason: str
+
+    @property
+    def resolved(self) -> bool:
+        return self.status == "resolved"
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ResolvedProduct:
+    """
+    A successfully resolved product.
+    """
+
+    product_id: str
+    product_name: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ResolvedDisruption:
+    """
+    Fully resolved disruption.
+
+    The original AI-extracted information is preserved, while
+    verified database IDs are attached separately.
+    """
+
+    event_type: str
+    supplier: Optional[EntityMatch]
+    products: tuple[ResolvedProduct, ...]
+
+    unresolved_entities: tuple[EntityMatch, ...]
+
+    requires_human_review: bool
+
+    def to_dict(self) -> dict:
+        return {
+            "event_type": self.event_type,
+            "supplier": (
+                self.supplier.to_dict()
+                if self.supplier
+                else None
+            ),
+            "products": [
+                product.to_dict()
+                for product in self.products
+            ],
+            "unresolved_entities": [
+                entity.to_dict()
+                for entity in self.unresolved_entities
+            ],
+            "requires_human_review": self.requires_human_review,
+        }
+
+
+# ============================================================
+# Normalization
+# ============================================================
+
+def normalize_name(value: Optional[str]) -> str:
+    """
+    Normalize text before deterministic database matching.
+
+    Examples:
+
+        " ABC Components " → "abc components"
+        "X-200"            → "x-200"
+    """
+
+    if not value:
+        return ""
+
+    return " ".join(value.strip().lower().split())
+
+
+# ============================================================
+# Supplier resolution
+# ============================================================
+
+def resolve_supplier(
+    supplier_name: Optional[str],
+) -> EntityMatch:
+    """
+    Resolve a supplier name against the suppliers table.
+
+    Resolution is deterministic.
+
+    No fuzzy guessing is performed.
+    """
+
+    if not supplier_name or not supplier_name.strip():
+        return EntityMatch(
+            input_value="",
+            entity_type="supplier",
+            entity_id=None,
+            entity_name=None,
+            status="missing",
+            confidence=0.0,
+            reason="Supplier was not provided in the disruption notice.",
+        )
+
+    normalized_input = normalize_name(supplier_name)
+
+    # First attempt: exact case-insensitive database match.
+    supplier = get_supplier_by_name(supplier_name)
+
+    if supplier:
+        return EntityMatch(
+            input_value=supplier_name,
+            entity_type="supplier",
+            entity_id=supplier["supplier_id"],
+            entity_name=supplier["name"],
+            status="resolved",
+            confidence=1.0,
+            reason="Exact supplier name matched a database record.",
+        )
+
+    # We intentionally DO NOT perform fuzzy matching here.
+    #
+    # Example:
+    #
+    # "ABC Component"
+    #
+    # should NOT automatically become:
+    #
+    # "ABC Components"
+    #
+    # because an incorrect supplier mapping could cause
+    # incorrect downstream business-impact calculations.
+
+    return EntityMatch(
+        input_value=supplier_name,
+        entity_type="supplier",
+        entity_id=None,
+        entity_name=None,
+        status="unresolved",
+        confidence=0.0,
+        reason=(
+            f"No supplier with normalized name "
+            f"'{normalized_input}' exists in the database."
+        ),
+    )
+
+
+# ============================================================
+# Product resolution
+# ============================================================
+
+def resolve_product(
+    product_name: str,
+) -> EntityMatch:
+    """
+    Resolve a product name against the products table.
+
+    Only exact deterministic matching is accepted.
+    """
+
+    if not product_name or not product_name.strip():
+        return EntityMatch(
+            input_value=product_name or "",
+            entity_type="product",
+            entity_id=None,
+            entity_name=None,
+            status="missing",
+            confidence=0.0,
+            reason="Product name was empty.",
+        )
+
+    normalized_input = normalize_name(product_name)
+
+    product = get_product_by_name(product_name)
+
+    if product:
+        return EntityMatch(
+            input_value=product_name,
+            entity_type="product",
+            entity_id=product["product_id"],
+            entity_name=product["name"],
+            status="resolved",
+            confidence=1.0,
+            reason="Exact product name matched a database record.",
+        )
+
+    return EntityMatch(
+        input_value=product_name,
+        entity_type="product",
+        entity_id=None,
+        entity_name=None,
+        status="unresolved",
+        confidence=0.0,
+        reason=(
+            f"No product with normalized name "
+            f"'{normalized_input}' exists in the database."
+        ),
+    )
+
+
+# ============================================================
+# Product resolution with supplier validation
+# ============================================================
+
+def resolve_products(
+    product_names: list[str],
+    supplier_id: Optional[str] = None,
+) -> tuple[
+    tuple[ResolvedProduct, ...],
+    tuple[EntityMatch, ...],
+]:
+    """
+    Resolve all products mentioned in a disruption.
+
+    If a supplier is known, verify that each resolved product
+    actually belongs to that supplier.
+
+    This prevents a disruption for Supplier A from accidentally
+    being mapped to a similarly named product belonging to
+    Supplier B.
+    """
+
+    resolved_products: list[ResolvedProduct] = []
+    unresolved: list[EntityMatch] = []
+
+    seen_product_ids: set[str] = set()
+
+    for product_name in product_names:
+
+        match = resolve_product(product_name)
+
+        if not match.resolved:
+            unresolved.append(match)
+            continue
+
+        product = get_product_by_name(product_name)
+
+        if product is None:
+            # Defensive check. This should not normally happen
+            # because resolve_product already found the record.
+            unresolved.append(
+                EntityMatch(
+                    input_value=product_name,
+                    entity_type="product",
+                    entity_id=None,
+                    entity_name=None,
+                    status="unresolved",
+                    confidence=0.0,
+                    reason="Product disappeared during resolution.",
+                )
+            )
+            continue
+
+        # ----------------------------------------------------
+        # Supplier-product consistency check
+        # ----------------------------------------------------
+
+        if supplier_id and product["supplier_id"] != supplier_id:
+
+            unresolved.append(
+                EntityMatch(
+                    input_value=product_name,
+                    entity_type="product",
+                    entity_id=product["product_id"],
+                    entity_name=product["name"],
+                    status="conflict",
+                    confidence=0.0,
+                    reason=(
+                        f"Product belongs to supplier "
+                        f"{product['supplier_id']}, not the resolved "
+                        f"supplier {supplier_id}."
+                    ),
+                )
+            )
+
+            continue
+
+        # Prevent duplicate products from appearing twice.
+        if product["product_id"] in seen_product_ids:
+            continue
+
+        seen_product_ids.add(product["product_id"])
+
+        resolved_products.append(
+            ResolvedProduct(
+                product_id=product["product_id"],
+                product_name=product["name"],
+            )
+        )
+
+    return (
+        tuple(resolved_products),
+        tuple(unresolved),
+    )
+
+
+# ============================================================
+# Complete disruption resolution
+# ============================================================
+
+def resolve_disruption(
+    disruption: DisruptionEvent,
+) -> ResolvedDisruption:
+    """
+    Resolve the AI-extracted disruption against our actual
+    supply-chain database.
+
+    Important:
+
+    Gemini provides interpretation.
+
+    This function verifies that interpretation against
+    deterministic application data.
+    """
+
+    # --------------------------------------------------------
+    # Resolve supplier
+    # --------------------------------------------------------
+
+    supplier_match = resolve_supplier(
+        disruption.supplier_name
+    )
+
+    # --------------------------------------------------------
+    # Resolve products
+    # --------------------------------------------------------
+
+    supplier_id = (
+        supplier_match.entity_id
+        if supplier_match.resolved
+        else None
+    )
+
+    products, unresolved_products = resolve_products(
+        disruption.affected_products,
+        supplier_id=supplier_id,
+    )
+
+    # --------------------------------------------------------
+    # Collect unresolved entities
+    # --------------------------------------------------------
+
+    unresolved_entities: list[EntityMatch] = []
+
+    if not supplier_match.resolved:
+        unresolved_entities.append(supplier_match)
+
+    unresolved_entities.extend(unresolved_products)
+
+    # --------------------------------------------------------
+    # Determine whether human review is required
+    # --------------------------------------------------------
+
+    requires_human_review = len(unresolved_entities) > 0
+
+    return ResolvedDisruption(
+        event_type=disruption.event_type,
+        supplier=(
+            supplier_match
+            if disruption.supplier_name
+            else None
+        ),
+        products=products,
+        unresolved_entities=tuple(unresolved_entities),
+        requires_human_review=requires_human_review,
+    )
+
+
+# ============================================================
+# Pretty printing
+# ============================================================
+
+def print_resolution(result: ResolvedDisruption) -> None:
+    """
+    Print a human-readable resolution result.
+    """
+
+    print("\nRippleX Entity Resolution")
+    print("=" * 50)
+
+    print(f"\nEvent type: {result.event_type}")
+
+    print("\nSupplier:")
+
+    if result.supplier:
+        print(
+            f"  Input:      {result.supplier.input_value}"
+        )
+        print(
+            f"  Database:   {result.supplier.entity_name}"
+        )
+        print(
+            f"  ID:         {result.supplier.entity_id}"
+        )
+        print(
+            f"  Status:     {result.supplier.status}"
+        )
+        print(
+            f"  Confidence: {result.supplier.confidence}"
+        )
+    else:
+        print("  Not provided.")
+
+    print("\nResolved products:")
+
+    if result.products:
+        for product in result.products:
+            print(
+                f"  ✓ {product.product_name}"
+                f" → {product.product_id}"
+            )
+    else:
+        print("  None.")
+
+    print("\nUnresolved / conflicting entities:")
+
+    if result.unresolved_entities:
+        for entity in result.unresolved_entities:
+            print(
+                f"  ⚠ {entity.entity_type}: "
+                f"{entity.input_value}"
+            )
+            print(
+                f"    Status: {entity.status}"
+            )
+            print(
+                f"    Reason: {entity.reason}"
+            )
+    else:
+        print("  None.")
+
+    print(
+        "\nHuman review required:",
+        "YES" if result.requires_human_review else "NO",
+    )
+
+
+# ============================================================
+# Tests
+# ============================================================
+
+if __name__ == "__main__":
+
+    # Import here so the module itself remains clean when
+    # imported by other parts of the application.
+    from backend.disruption_parser import parse_disruption
+
+    # --------------------------------------------------------
+    # TEST 1 — Normal disruption
+    # --------------------------------------------------------
+
+    print("\n\nTEST 1 — Valid disruption")
+
+    notice = """
+    Due to an unexpected production issue at our Bangalore
+    facility, ABC Components will not be able to dispatch
+    X-200 and X-300 for approximately 10 days.
+    """
+
+    disruption = parse_disruption(notice)
+
+    result = resolve_disruption(disruption)
+
+    print_resolution(result)
+
+    # --------------------------------------------------------
+    # TEST 2 — Unknown supplier
+    # --------------------------------------------------------
+
+    print("\n\nTEST 2 — Unknown supplier")
+
+    notice = """
+    NovaTech Industries has stopped production of the Q-999
+    for the next 15 days.
+    """
+
+    disruption = parse_disruption(notice)
+
+    result = resolve_disruption(disruption)
+
+    print_resolution(result)
+
+    # --------------------------------------------------------
+    # TEST 3 — Ambiguous / insufficient information
+    # --------------------------------------------------------
+
+    print("\n\nTEST 3 — Ambiguous disruption")
+
+    notice = """
+    We're experiencing delays with the X-series.
+    Please expect some disruption to upcoming shipments.
+    """
+
+    disruption = parse_disruption(notice)
+
+    result = resolve_disruption(disruption)
+
+    print_resolution(result)

@@ -50,13 +50,13 @@ def get_supplier(supplier_id):
 
 def get_supplier_by_name(name):
     """
-    Find a supplier by name.
+    Find a supplier by normalized name.
     """
     rows = query_db(
         """
         SELECT *
         FROM suppliers
-        WHERE LOWER(name) = LOWER(?)
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
         """,
         (name,)
     )
@@ -82,13 +82,13 @@ def get_product(product_id):
 
 def get_product_by_name(name):
     """
-    Find a product by name.
+    Find a product by normalized name.
     """
     rows = query_db(
         """
         SELECT *
         FROM products
-        WHERE LOWER(name) = LOWER(?)
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))
         """,
         (name,)
     )
