@@ -9,7 +9,10 @@ def create_database():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Suppliers
+    # -------------------------
+    # SUPPLIERS
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS suppliers (
             supplier_id TEXT PRIMARY KEY,
@@ -19,7 +22,10 @@ def create_database():
         )
     """)
 
-    # Products
+    # -------------------------
+    # PRODUCTS
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS products (
             product_id TEXT PRIMARY KEY,
@@ -31,7 +37,10 @@ def create_database():
         )
     """)
 
-    # Warehouses
+    # -------------------------
+    # WAREHOUSES
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS warehouses (
             warehouse_id TEXT PRIMARY KEY,
@@ -40,7 +49,10 @@ def create_database():
         )
     """)
 
-    # Inventory
+    # -------------------------
+    # INVENTORY
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
             warehouse_id TEXT,
@@ -53,7 +65,10 @@ def create_database():
         )
     """)
 
-    # Shipments
+    # -------------------------
+    # SHIPMENTS
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS shipments (
             shipment_id TEXT PRIMARY KEY,
@@ -69,7 +84,10 @@ def create_database():
         )
     """)
 
-    # Orders
+    # -------------------------
+    # ORDERS
+    # -------------------------
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             order_id TEXT PRIMARY KEY,
@@ -94,7 +112,7 @@ def seed_data():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Clear old data so we can safely rerun this script
+    # Clear old data so the seed is completely reproducible.
     cursor.execute("DELETE FROM orders")
     cursor.execute("DELETE FROM shipments")
     cursor.execute("DELETE FROM inventory")
@@ -102,9 +120,9 @@ def seed_data():
     cursor.execute("DELETE FROM suppliers")
     cursor.execute("DELETE FROM warehouses")
 
-    # -------------------------
+    # ============================================================
     # SUPPLIERS
-    # -------------------------
+    # ============================================================
 
     suppliers = [
         ("SUP001", "ABC Components", "Bangalore", 0.94),
@@ -119,9 +137,9 @@ def seed_data():
         VALUES (?, ?, ?, ?)
     """, suppliers)
 
-    # -------------------------
+    # ============================================================
     # WAREHOUSES
-    # -------------------------
+    # ============================================================
 
     warehouses = [
         ("WH001", "Bangalore Central", "Bangalore"),
@@ -134,9 +152,9 @@ def seed_data():
         VALUES (?, ?, ?)
     """, warehouses)
 
-    # -------------------------
+    # ============================================================
     # PRODUCTS
-    # -------------------------
+    # ============================================================
 
     products = [
         ("P001", "X-200", "SUP001", 500, 850),
@@ -165,9 +183,9 @@ def seed_data():
         VALUES (?, ?, ?, ?, ?)
     """, products)
 
-    # -------------------------
+    # ============================================================
     # INVENTORY
-    # -------------------------
+    # ============================================================
 
     random.seed(42)
 
@@ -179,7 +197,12 @@ def seed_data():
             reserved = random.randint(0, min(15, quantity))
 
             inventory.append(
-                (warehouse_id, product_id, quantity, reserved)
+                (
+                    warehouse_id,
+                    product_id,
+                    quantity,
+                    reserved,
+                )
             )
 
     cursor.executemany("""
@@ -187,30 +210,116 @@ def seed_data():
         VALUES (?, ?, ?, ?)
     """, inventory)
 
-    # -------------------------
+    # ============================================================
+    # ENGINEERED INVENTORY SCENARIOS
+    # ============================================================
+    #
+    # These are NOT hardcoded into the application logic.
+    #
+    # They simply make the synthetic company's data realistic enough
+    # to exercise different disruption scenarios.
+    #
+    # P001 / X-200:
+    # Deliberately low available stock at Bangalore.
+    #
+    # P002 / X-300:
+    # Deliberately healthy stock at Bangalore.
+    #
+    # This lets the same supplier disruption affect X-200 strongly
+    # while X-300 remains protected by existing inventory.
+    # ============================================================
+
+    cursor.execute("""
+        UPDATE inventory
+        SET quantity = 35,
+            reserved_quantity = 10
+        WHERE warehouse_id = 'WH001'
+          AND product_id = 'P001'
+    """)
+
+    cursor.execute("""
+        UPDATE inventory
+        SET quantity = 220,
+            reserved_quantity = 20
+        WHERE warehouse_id = 'WH001'
+          AND product_id = 'P002'
+    """)
+    cursor.execute("""
+            UPDATE inventory
+            SET quantity = 90,
+                reserved_quantity = 10
+            WHERE warehouse_id = 'WH002'
+              AND product_id = 'P001'
+        """)
+
+    
+
+    # ============================================================
     # SHIPMENTS
-    # -------------------------
+    # ============================================================
 
     today = date.today()
 
     shipments = [
-        ("SH001", "SUP001", "P001", 120, "WH001",
-         str(today + timedelta(days=10)), "IN_TRANSIT"),
+        (
+            "SH001",
+            "SUP001",
+            "P001",
+            120,
+            "WH001",
+            str(today + timedelta(days=10)),
+            "IN_TRANSIT",
+        ),
 
-        ("SH002", "SUP001", "P002", 100, "WH001",
-         str(today + timedelta(days=12)), "IN_TRANSIT"),
+        (
+            "SH002",
+            "SUP001",
+            "P002",
+            100,
+            "WH001",
+            str(today + timedelta(days=12)),
+            "IN_TRANSIT",
+        ),
 
-        ("SH003", "SUP002", "P004", 150, "WH002",
-         str(today + timedelta(days=7)), "IN_TRANSIT"),
+        (
+            "SH003",
+            "SUP002",
+            "P004",
+            150,
+            "WH002",
+            str(today + timedelta(days=7)),
+            "IN_TRANSIT",
+        ),
 
-        ("SH004", "SUP003", "P007", 200, "WH003",
-         str(today + timedelta(days=5)), "IN_TRANSIT"),
+        (
+            "SH004",
+            "SUP003",
+            "P007",
+            200,
+            "WH003",
+            str(today + timedelta(days=5)),
+            "IN_TRANSIT",
+        ),
 
-        ("SH005", "SUP004", "P010", 100, "WH003",
-         str(today + timedelta(days=8)), "IN_TRANSIT"),
+        (
+            "SH005",
+            "SUP004",
+            "P010",
+            100,
+            "WH003",
+            str(today + timedelta(days=8)),
+            "IN_TRANSIT",
+        ),
 
-        ("SH006", "SUP005", "P013", 180, "WH001",
-         str(today + timedelta(days=6)), "IN_TRANSIT"),
+        (
+            "SH006",
+            "SUP005",
+            "P013",
+            180,
+            "WH001",
+            str(today + timedelta(days=6)),
+            "IN_TRANSIT",
+        ),
     ]
 
     cursor.executemany("""
@@ -218,19 +327,22 @@ def seed_data():
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, shipments)
 
-    # -------------------------
-    # ORDERS
-    # -------------------------
+    # ============================================================
+    # BACKGROUND ORDERS
+    # ============================================================
 
     orders = []
 
     for i in range(1, 101):
 
         product = random.choice(products)
+
         product_id = product[0]
         selling_price = product[4]
 
-        warehouse_id = random.choice(["WH001", "WH002", "WH003"])
+        warehouse_id = random.choice(
+            ["WH001", "WH002", "WH003"]
+        )
 
         quantity = random.randint(2, 15)
 
@@ -244,22 +356,142 @@ def seed_data():
 
         order_value = quantity * selling_price
 
-        orders.append((
-            f"ORD{i:03d}",
-            f"Customer {i}",
-            product_id,
-            quantity,
-            warehouse_id,
-            str(promised_date),
-            priority,
-            order_value,
-            "PENDING"
-        ))
+        orders.append(
+            (
+                f"ORD{i:03d}",
+                f"Customer {i}",
+                product_id,
+                quantity,
+                warehouse_id,
+                str(promised_date),
+                priority,
+                order_value,
+                "PENDING",
+            )
+        )
 
     cursor.executemany("""
         INSERT INTO orders
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, orders)
+
+    # ============================================================
+    # ENGINEERED CUSTOMER ORDERS
+    # ============================================================
+    #
+    # These orders intentionally depend on X-200 at WH001.
+    #
+    # Available X-200:
+    #     35 - 10 reserved = 25 units
+    #
+    # Pending X-200 demand created here:
+    #     40 + 30 + 25 = 95 units
+    #
+    # Therefore the disruption to SH001 creates a real shortage.
+    #
+    # The random background orders remain in the dataset as well.
+    # ============================================================
+
+    x200_orders = [
+        (
+            "ORD101",
+            "Reliance Retail",
+            "P001",
+            40,
+            "WH001",
+            str(today + timedelta(days=3)),
+            "HIGH",
+            40 * 850,
+            "PENDING",
+        ),
+        (
+            "ORD102",
+            "TechWorld Distribution",
+            "P001",
+            30,
+            "WH001",
+            str(today + timedelta(days=5)),
+            "HIGH",
+            30 * 850,
+            "PENDING",
+        ),
+        (
+            "ORD103",
+            "Metro Electronics",
+            "P001",
+            25,
+            "WH001",
+            str(today + timedelta(days=8)),
+            "MEDIUM",
+            25 * 850,
+            "PENDING",
+        ),
+    ]
+
+    cursor.executemany("""
+        INSERT INTO orders
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, x200_orders)
+
+    # ============================================================
+    # CONTROLLED X-300 ORDERS
+    # ============================================================
+    #
+    # X-300 has 200 available units after the inventory adjustment.
+    # These orders total only 60 units, so the same disruption should
+    # NOT create an X-300 shortage.
+    #
+    # This gives us a useful demonstration:
+    #
+    #   X-200 -> affected
+    #   X-300 -> protected by existing inventory
+    #
+    # ============================================================
+
+    x300_orders = [
+        (
+            "ORD104",
+            "Enterprise Systems",
+            "P002",
+            25,
+            "WH001",
+            str(today + timedelta(days=4)),
+            "HIGH",
+            25 * 1200,
+            "PENDING",
+        ),
+        (
+            "ORD105",
+            "Digital Hub",
+            "P002",
+            20,
+            "WH001",
+            str(today + timedelta(days=7)),
+            "MEDIUM",
+            20 * 1200,
+            "PENDING",
+        ),
+        (
+            "ORD106",
+            "NorthStar Retail",
+            "P002",
+            15,
+            "WH001",
+            str(today + timedelta(days=10)),
+            "LOW",
+            15 * 1200,
+            "PENDING",
+        ),
+    ]
+
+    cursor.executemany("""
+        INSERT INTO orders
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, x300_orders)
+
+    # ============================================================
+    # COMMIT
+    # ============================================================
 
     conn.commit()
     conn.close()
@@ -269,4 +501,4 @@ if __name__ == "__main__":
     create_database()
     seed_data()
 
-    print("RippleX database created successfully!")
+    print("RippleX database created and seeded successfully.")
