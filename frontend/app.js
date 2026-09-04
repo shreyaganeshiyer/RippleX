@@ -1,0 +1,1087 @@
+// ============================================================
+// RIPPLEX FRONTEND
+// ============================================================
+
+const noticeInput = document.getElementById("notice");
+const analyzeButton = document.getElementById("analyzeButton");
+
+const results = document.getElementById("results");
+const reviewState = document.getElementById("reviewState");
+
+const errorMessage = document.getElementById("errorMessage");
+
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function escapeHtml(value) {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+
+function formatNumber(value) {
+    return Number(value || 0).toLocaleString("en-IN");
+}
+
+
+function formatCurrency(value) {
+    return Number(value || 0).toLocaleString(
+        "en-IN",
+        {
+            style: "currency",
+            currency: "INR",
+            maximumFractionDigits: 0
+        }
+    );
+}
+
+
+function showError(message) {
+    errorMessage.textContent = message;
+    errorMessage.classList.remove("hidden");
+}
+
+
+function hideError() {
+    errorMessage.textContent = "";
+    errorMessage.classList.add("hidden");
+}
+
+
+function setLoading(loading) {
+
+    analyzeButton.disabled = loading;
+
+    if (loading) {
+        analyzeButton.innerHTML = `
+            <span>◌</span>
+            Analyzing...
+        `;
+    } else {
+        analyzeButton.innerHTML = `
+            <span>⚡</span>
+            Analyze Disruption
+        `;
+    }
+}
+
+
+// ============================================================
+// CLOCK
+// ============================================================
+
+function updateClock() {
+
+    const now = new Date();
+
+    const date = now.toLocaleDateString(
+        "en-IN",
+        {
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+        }
+    );
+
+    const time = now.toLocaleTimeString(
+        "en-IN",
+        {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false
+        }
+    );
+
+    document.getElementById(
+        "currentTime"
+    ).textContent = `${date} · ${time} IST`;
+}
+
+updateClock();
+
+setInterval(
+    updateClock,
+    1000
+);
+
+
+// ============================================================
+// BACKEND HEALTH
+// ============================================================
+
+async function checkBackend() {
+
+    const status = document.getElementById(
+        "backendStatus"
+    );
+
+    const statusText = document.getElementById(
+        "statusText"
+    );
+
+    try {
+
+        const response = await fetch(
+            "/api/health"
+        );
+
+        if (!response.ok) {
+            throw new Error(
+                "Backend returned an error."
+            );
+        }
+
+        status.className =
+            "status-pill online";
+
+        statusText.textContent =
+            "Backend Online";
+
+    } catch (error) {
+
+        status.className =
+            "status-pill offline";
+
+        statusText.textContent =
+            "Backend Unavailable";
+    }
+}
+
+checkBackend();
+
+
+// ============================================================
+// EVENT RENDERING
+// ============================================================
+
+function renderEvent(event) {
+
+    const container = document.getElementById(
+        "eventContent"
+    );
+
+    const products = (
+        event.affected_products || []
+    ).join(", ") || "Not identified";
+
+    container.innerHTML = `
+
+        <div class="event-item">
+
+            <div class="event-label">
+                Event Type
+            </div>
+
+            <div class="event-value">
+                ${escapeHtml(
+                    event.event_type || "Unknown"
+                )}
+            </div>
+
+        </div>
+
+
+        <div class="event-item">
+
+            <div class="event-label">
+                Supplier
+            </div>
+
+            <div class="event-value">
+                ${escapeHtml(
+                    event.supplier_name || "Not identified"
+                )}
+            </div>
+
+        </div>
+
+
+        <div class="event-item">
+
+            <div class="event-label">
+                Location
+            </div>
+
+            <div class="event-value">
+                ${escapeHtml(
+                    event.location || "Not identified"
+                )}
+            </div>
+
+        </div>
+
+
+        <div class="event-item">
+
+            <div class="event-label">
+                Expected Delay
+            </div>
+
+            <div class="event-value">
+                ${
+                    event.delay_days !== null &&
+                    event.delay_days !== undefined
+                        ? `${escapeHtml(event.delay_days)} days`
+                        : "Not specified"
+                }
+            </div>
+
+        </div>
+
+
+        <div class="event-item event-summary">
+
+            <div class="event-label">
+                Extracted Summary
+            </div>
+
+            <div class="event-value">
+                ${escapeHtml(
+                    event.summary || "No summary available."
+                )}
+            </div>
+
+        </div>
+
+
+        <div class="event-item event-summary">
+
+            <div class="event-label">
+                Affected Products
+            </div>
+
+            <div class="event-value">
+                ${escapeHtml(products)}
+            </div>
+
+        </div>
+    `;
+}
+
+
+// ============================================================
+// IMPACT
+// ============================================================
+
+function renderImpact(impact) {
+
+    document.getElementById(
+        "ordersAtRisk"
+    ).textContent = formatNumber(
+        impact.total_orders_at_risk
+    );
+
+    document.getElementById(
+        "unitsAtRisk"
+    ).textContent = formatNumber(
+        impact.total_units_at_risk
+    );
+
+    document.getElementById(
+        "valueAtRisk"
+    ).textContent = formatCurrency(
+        impact.total_order_value_at_risk
+    );
+
+    document.getElementById(
+        "shipmentsAffected"
+    ).textContent = formatNumber(
+        (impact.affected_shipments || []).length
+    );
+
+    document.getElementById(
+        "impactSummary"
+    ).textContent =
+        impact.summary ||
+        "No impact summary available.";
+}
+
+
+// ============================================================
+// IMPACT CHAIN
+// ============================================================
+
+function renderImpactChain(
+    event,
+    impact
+) {
+
+    const shipments =
+        impact.affected_shipments || [];
+
+    const orders =
+        impact.affected_orders || [];
+
+    const products =
+        impact.affected_products || [];
+
+    const supplierNames = [
+        ...new Set(
+            shipments.map(
+                shipment =>
+                    shipment.supplier_name
+            )
+        )
+    ];
+
+    const shipmentIds = [
+        ...new Set(
+            shipments.map(
+                shipment =>
+                    shipment.shipment_id
+            )
+        )
+    ];
+
+    const productNames = [
+        ...new Set(
+            shipments.map(
+                shipment =>
+                    shipment.product_name
+            )
+        )
+    ];
+
+    const warehouseNames = [
+        ...new Set(
+            shipments.map(
+                shipment =>
+                    shipment.warehouse_name
+            )
+        )
+    ];
+
+    const customers = [
+        ...new Set(
+            orders.map(
+                order =>
+                    order.customer_name
+            )
+        )
+    ];
+
+    document.getElementById(
+        "chainSupplier"
+    ).textContent =
+        supplierNames.join(", ") ||
+        event.supplier_name ||
+        "—";
+
+    document.getElementById(
+        "chainShipment"
+    ).textContent =
+        shipmentIds.length
+            ? `${shipmentIds.length} affected`
+            : "—";
+
+    document.getElementById(
+        "chainProduct"
+    ).textContent =
+        productNames.join(", ") ||
+        products.map(
+            product => product.product_name
+        ).join(", ") ||
+        "—";
+
+    document.getElementById(
+        "chainWarehouse"
+    ).textContent =
+        warehouseNames.join(", ") ||
+        "—";
+
+    document.getElementById(
+        "chainOrders"
+    ).textContent =
+        `${orders.length} affected`;
+
+    document.getElementById(
+        "chainCustomers"
+    ).textContent =
+        `${customers.length} customers`;
+}
+
+
+// ============================================================
+// ORDERS
+// ============================================================
+
+function renderOrders(orders) {
+
+    const tbody = document.getElementById(
+        "ordersTable"
+    );
+
+    if (!orders.length) {
+
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="8">
+                    No affected orders.
+                </td>
+            </tr>
+        `;
+
+        return;
+    }
+
+    tbody.innerHTML = orders.map(
+        order => `
+
+            <tr>
+
+                <td class="order-id">
+                    ${escapeHtml(order.order_id)}
+                </td>
+
+                <td>
+                    ${escapeHtml(order.customer_name)}
+                </td>
+
+                <td>
+                    ${escapeHtml(order.product_name)}
+                </td>
+
+                <td>
+                    ${formatNumber(order.quantity)}
+                </td>
+
+                <td class="shortage">
+                    ${formatNumber(
+                        order.shortage_quantity
+                    )}
+                </td>
+
+                <td>
+                    <span class="priority ${escapeHtml(
+                        order.priority
+                    )}">
+                        ${escapeHtml(
+                            order.priority
+                        )}
+                    </span>
+                </td>
+
+                <td>
+                    ${formatNumber(
+                        order.urgency_score
+                    )}
+                </td>
+
+                <td>
+                    ${formatCurrency(
+                        order.order_value_at_risk
+                    )}
+                </td>
+
+            </tr>
+        `
+    ).join("");
+}
+
+
+// ============================================================
+// RESPONSE OPTIONS
+// ============================================================
+
+function renderResponseOptions(
+    options,
+    recommendation
+) {
+
+    const container = document.getElementById(
+        "responseOptions"
+    );
+
+    if (!options.length) {
+
+        container.innerHTML = `
+            <div class="option-card">
+                No response options available.
+            </div>
+        `;
+
+        return;
+    }
+
+    const recommendedType =
+        recommendation?.recommended_option_type;
+
+    container.innerHTML = options.map(
+        option => {
+
+            const isRecommended =
+                option.option_type ===
+                recommendedType;
+
+            return `
+
+                <div class="option-card ${
+                    isRecommended
+                        ? "recommended"
+                        : ""
+                }">
+
+                    <div class="option-header">
+
+                        <div>
+
+                            <div class="option-title">
+                                ${escapeHtml(
+                                    option.title
+                                )}
+                            </div>
+
+                            <div class="option-type">
+                                ${escapeHtml(
+                                    option.option_type
+                                )}
+                            </div>
+
+                        </div>
+
+                        ${
+                            isRecommended
+                                ? `
+                                    <div class="option-type"
+                                         style="color:#40d99b">
+                                        RECOMMENDED
+                                    </div>
+                                  `
+                                : ""
+                        }
+
+                    </div>
+
+
+                    <div class="option-description">
+                        ${escapeHtml(
+                            option.description
+                        )}
+                    </div>
+
+
+                    <div class="option-metrics">
+
+                        <div class="option-metric">
+
+                            <div class="option-metric-label">
+                                Units
+                            </div>
+
+                            <div class="option-metric-value">
+                                ${formatNumber(
+                                    option.units_recovered
+                                )}
+                            </div>
+
+                        </div>
+
+
+                        <div class="option-metric">
+
+                            <div class="option-metric-label">
+                                Orders
+                            </div>
+
+                            <div class="option-metric-value">
+                                ${formatNumber(
+                                    option.orders_helped
+                                )}
+                            </div>
+
+                        </div>
+
+
+                        <div class="option-metric">
+
+                            <div class="option-metric-label">
+                                Cost
+                            </div>
+
+                            <div class="option-metric-value">
+                                ${formatCurrency(
+                                    option.estimated_cost
+                                )}
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="option-tradeoff">
+
+                        <strong>
+                            Trade-off:
+                        </strong>
+
+                        ${escapeHtml(
+                            option.tradeoff
+                        )}
+
+                    </div>
+
+
+                    <div class="feasibility ${
+                        option.feasible
+                            ? "feasible"
+                            : "infeasible"
+                    }">
+
+                        ${
+                            option.feasible
+                                ? "✓ FEASIBLE"
+                                : "✕ NOT FEASIBLE"
+                        }
+
+                    </div>
+
+                </div>
+            `;
+        }
+    ).join("");
+}
+
+
+// ============================================================
+// RECOMMENDATION
+// ============================================================
+
+function renderRecommendation(
+    recommendation
+) {
+
+    const panel = document.getElementById(
+        "recommendationPanel"
+    );
+
+    if (!recommendation) {
+
+        panel.classList.add("hidden");
+
+        return;
+    }
+
+    panel.classList.remove("hidden");
+
+    document.getElementById(
+        "recommendationTitle"
+    ).textContent =
+        recommendation.title ||
+        "Human review required";
+
+    document.getElementById(
+        "recommendationReasoning"
+    ).textContent =
+        recommendation.reasoning ||
+        "";
+
+    document.getElementById(
+        "recommendationMetrics"
+    ).innerHTML = `
+
+        <div class="recommendation-metric">
+            ${escapeHtml(
+                recommendation.recommended_option_type
+            )}
+        </div>
+
+        <div class="recommendation-metric">
+            ${formatNumber(
+                recommendation.expected_units_recovered
+            )} units
+        </div>
+
+        <div class="recommendation-metric">
+            ${formatNumber(
+                recommendation.orders_protected
+            )} orders
+        </div>
+
+        <div class="recommendation-metric">
+            ${formatCurrency(
+                recommendation.estimated_cost
+            )}
+        </div>
+
+        <div class="recommendation-metric">
+            Confidence:
+            ${Math.round(
+                Number(
+                    recommendation.confidence || 0
+                ) * 100
+            )}%
+        </div>
+    `;
+}
+
+
+// ============================================================
+// EVIDENCE
+// ============================================================
+
+function renderEvidence(impact, options) {
+
+    const container = document.getElementById(
+        "evidenceList"
+    );
+
+    let evidence = [];
+
+    if (impact.evidence) {
+        evidence.push(
+            ...impact.evidence
+        );
+    }
+
+    for (const order of (
+        impact.affected_orders || []
+    )) {
+
+        evidence.push(
+            ...(order.evidence || [])
+        );
+    }
+
+    for (const option of options) {
+
+        evidence.push(
+            ...(option.evidence || [])
+        );
+    }
+
+    // Remove duplicate evidence entries.
+
+    const unique = [];
+
+    const seen = new Set();
+
+    for (const item of evidence) {
+
+        const key =
+            `${item.source_type}|${item.source_id}|${item.description}`;
+
+        if (!seen.has(key)) {
+
+            seen.add(key);
+
+            unique.push(item);
+        }
+    }
+
+    if (!unique.length) {
+
+        container.innerHTML = `
+            <div class="evidence-description">
+                No evidence records returned.
+            </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML = unique.map(
+        item => `
+
+            <div class="evidence-item">
+
+                <div class="evidence-type">
+                    ${escapeHtml(
+                        item.source_type
+                    )}
+                </div>
+
+                <div class="evidence-id">
+                    ${escapeHtml(
+                        item.source_id
+                    )}
+                </div>
+
+                <div class="evidence-description">
+                    ${escapeHtml(
+                        item.description
+                    )}
+                </div>
+
+            </div>
+        `
+    ).join("");
+}
+
+
+// ============================================================
+// HUMAN REVIEW
+// ============================================================
+
+function renderHumanReview(
+    resolution,
+    impact
+) {
+
+    const panel = document.getElementById(
+        "reviewState"
+    );
+
+    if (impact.has_impact) {
+
+        panel.classList.add("hidden");
+
+        return;
+    }
+
+    panel.classList.remove("hidden");
+
+    document.getElementById(
+        "reviewMessage"
+    ).textContent =
+        impact.summary ||
+        "RippleX could not safely establish business impact.";
+
+    const unresolved =
+        resolution?.unresolved_entities || [];
+
+    const details =
+        document.getElementById(
+            "resolutionDetails"
+        );
+
+    if (!unresolved.length) {
+
+        details.innerHTML = "";
+
+        return;
+    }
+
+    details.innerHTML = unresolved.map(
+        entity => `
+
+            <div class="evidence-item">
+
+                <div class="evidence-type">
+                    ${escapeHtml(
+                        entity.entity_type
+                    )}
+                </div>
+
+                <div class="evidence-id">
+                    ${escapeHtml(
+                        entity.input_value
+                    )}
+                </div>
+
+                <div class="evidence-description">
+                    ${escapeHtml(
+                        entity.reason
+                    )}
+                </div>
+
+            </div>
+        `
+    ).join("");
+}
+
+
+// ============================================================
+// MAIN ANALYSIS
+// ============================================================
+
+async function analyzeDisruption() {
+
+    hideError();
+
+    const notice =
+        noticeInput.value.trim();
+
+    if (!notice) {
+
+        showError(
+            "Please enter a disruption notice."
+        );
+
+        noticeInput.focus();
+
+        return;
+    }
+
+    setLoading(true);
+
+    results.classList.add("hidden");
+    reviewState.classList.add("hidden");
+
+    try {
+
+        const response = await fetch(
+            "/api/analyze",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body: JSON.stringify({
+                    notice: notice
+                })
+            }
+        );
+
+        const data =
+            await response.json();
+
+        if (!response.ok) {
+
+            const message =
+                data?.detail?.message ||
+                data?.detail ||
+                "Analysis failed.";
+
+            throw new Error(
+                message
+            );
+        }
+
+
+        // ----------------------------------------------------
+        // Render event
+        // ----------------------------------------------------
+
+        renderEvent(
+            data.event || {}
+        );
+
+
+        // ----------------------------------------------------
+        // Render impact
+        // ----------------------------------------------------
+
+        const impact =
+            data.impact || {};
+
+        renderImpact(
+            impact
+        );
+
+
+        // ----------------------------------------------------
+        // Render chain
+        // ----------------------------------------------------
+
+        renderImpactChain(
+            data.event || {},
+            impact
+        );
+
+
+        // ----------------------------------------------------
+        // Render orders
+        // ----------------------------------------------------
+
+        renderOrders(
+            impact.affected_orders || []
+        );
+
+
+        // ----------------------------------------------------
+        // Render responses
+        // ----------------------------------------------------
+
+        renderResponseOptions(
+            data.response_options || [],
+            data.recommendation
+        );
+
+
+        // ----------------------------------------------------
+        // Render recommendation
+        // ----------------------------------------------------
+
+        renderRecommendation(
+            data.recommendation
+        );
+
+
+        // ----------------------------------------------------
+        // Render evidence
+        // ----------------------------------------------------
+
+        renderEvidence(
+            impact,
+            data.response_options || []
+        );
+
+
+        // ----------------------------------------------------
+        // Human review / no-impact state
+        // ----------------------------------------------------
+
+        renderHumanReview(
+            data.resolution,
+            impact
+        );
+
+
+        // ----------------------------------------------------
+        // Show appropriate UI
+        // ----------------------------------------------------
+
+        results.classList.remove(
+            "hidden"
+        );
+
+    } catch (error) {
+
+        console.error(
+            "RippleX analysis error:",
+            error
+        );
+
+        showError(
+            error.message ||
+            "Unable to analyze disruption."
+        );
+
+    } finally {
+
+        setLoading(false);
+    }
+}
+
+
+// ============================================================
+// BUTTON
+// ============================================================
+
+analyzeButton.addEventListener(
+    "click",
+    analyzeDisruption
+);
+
+
+// ============================================================
+// CTRL/CMD + ENTER
+// ============================================================
+
+noticeInput.addEventListener(
+    "keydown",
+    event => {
+
+        if (
+            (event.ctrlKey || event.metaKey) &&
+            event.key === "Enter"
+        ) {
+            analyzeDisruption();
+        }
+
+    }
+);

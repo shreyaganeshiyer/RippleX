@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>RippleX — Supply Chain Command Center</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+<div class="app-shell">
+
+    <!-- =====================================================
+         HEADER
+    ====================================================== -->
+
+    <header class="topbar">
+
+        <div class="brand">
+
+            <div class="brand-mark">
+                <span class="node node-top"></span>
+                <span class="node node-left"></span>
+                <span class="node node-right"></span>
+
+                <span class="line line-left"></span>
+                <span class="line line-right"></span>
+            </div>
+
+            <div>
+                <div class="brand-name">RippleX</div>
+                <div class="brand-subtitle">
+                    AI Supply Chain Disruption Command Center
+                </div>
+            </div>
+
+        </div>
+
+        <div class="header-right">
+
+            <div id="currentTime" class="timestamp">
+                -- --- ---- · --:-- IST
+            </div>
+
+            <div id="backendStatus" class="status-pill checking">
+                <span class="status-dot"></span>
+                <span id="statusText">Checking backend</span>
+            </div>
+
+        </div>
+
+    </header>
+
+
+    <!-- =====================================================
+         MAIN
+    ====================================================== -->
+
+    <main class="main-content">
+
+        <!-- ANALYZE CARD -->
+
+        <section class="panel analyze-panel">
+
+            <div class="panel-heading">
+
+                <div class="heading-icon">
+                    ⚡
+                </div>
+
+                <div>
+                    <h1>Analyze a Disruption</h1>
+
+                    <p>
+                        Paste a supplier, carrier, warehouse,
+                        or logistics disruption notice.
+                    </p>
+                </div>
+
+            </div>
+
+
+            <div class="notice-wrapper">
+
+                <label for="notice">
+                    Disruption notice
+                </label>
+
+                <textarea
+                    id="notice"
+                    placeholder="Example:
+Due to an unexpected production issue at our Bangalore facility, we won't be able to dispatch the X-200 and X-300 orders scheduled this week. We expect operations to resume in around 10 days."
+                ></textarea>
+
+            </div>
+
+
+            <div class="analyze-actions">
+
+                <button
+                    id="analyzeButton"
+                    class="primary-button"
+                >
+                    <span>⚡</span>
+                    Analyze Disruption
+                </button>
+
+            </div>
+
+            <div
+                id="errorMessage"
+                class="error-message hidden"
+            ></div>
+
+        </section>
+
+
+        <!-- =================================================
+             RESULTS
+        ================================================== -->
+
+        <section
+            id="results"
+            class="results hidden"
+        >
+
+            <!-- EVENT -->
+
+            <section class="panel">
+
+                <div class="section-title">
+                    <span class="section-icon">◈</span>
+
+                    <div>
+                        <h2>Understood Event</h2>
+                        <p>
+                            What RippleX extracted from the notice
+                        </p>
+                    </div>
+                </div>
+
+                <div id="eventContent" class="event-grid"></div>
+
+            </section>
+
+
+            <!-- IMPACT KPIs -->
+
+            <section class="kpi-grid">
+
+                <div class="kpi-card danger">
+
+                    <div class="kpi-label">
+                        ORDERS AT RISK
+                    </div>
+
+                    <div
+                        id="ordersAtRisk"
+                        class="kpi-value"
+                    >
+                        0
+                    </div>
+
+                    <div class="kpi-description">
+                        Customer orders requiring attention
+                    </div>
+
+                </div>
+
+
+                <div class="kpi-card danger">
+
+                    <div class="kpi-label">
+                        UNITS AT RISK
+                    </div>
+
+                    <div
+                        id="unitsAtRisk"
+                        class="kpi-value"
+                    >
+                        0
+                    </div>
+
+                    <div class="kpi-description">
+                        Units exposed to disruption
+                    </div>
+
+                </div>
+
+
+                <div class="kpi-card warning">
+
+                    <div class="kpi-label">
+                        ORDER VALUE AT RISK
+                    </div>
+
+                    <div
+                        id="valueAtRisk"
+                        class="kpi-value"
+                    >
+                        ₹0
+                    </div>
+
+                    <div class="kpi-description">
+                        Customer value exposed
+                    </div>
+
+                </div>
+
+
+                <div class="kpi-card">
+
+                    <div class="kpi-label">
+                        AFFECTED SHIPMENTS
+                    </div>
+
+                    <div
+                        id="shipmentsAffected"
+                        class="kpi-value"
+                    >
+                        0
+                    </div>
+
+                    <div class="kpi-description">
+                        Incoming shipments impacted
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <!-- IMPACT SUMMARY -->
+
+            <section class="panel">
+
+                <div class="section-title">
+                    <span class="section-icon">⚠</span>
+
+                    <div>
+                        <h2>Business Impact</h2>
+                        <p>
+                            Deterministic impact calculated from
+                            RippleX supply-chain data
+                        </p>
+                    </div>
+                </div>
+
+                <div
+                    id="impactSummary"
+                    class="impact-summary"
+                ></div>
+
+            </section>
+
+
+            <!-- IMPACT CHAIN -->
+
+            <section class="panel">
+
+                <div class="section-title">
+
+                    <span class="section-icon">
+                        ⇢
+                    </span>
+
+                    <div>
+                        <h2>Impact Chain</h2>
+
+                        <p>
+                            Trace the disruption through the
+                            supply chain
+                        </p>
+                    </div>
+
+                </div>
+
+
+                <div class="impact-chain">
+
+                    <div class="chain-node">
+                        <strong>Supplier</strong>
+                        <span id="chainSupplier">—</span>
+                    </div>
+
+                    <div class="chain-arrow">→</div>
+
+                    <div class="chain-node">
+                        <strong>Shipment</strong>
+                        <span id="chainShipment">—</span>
+                    </div>
+
+                    <div class="chain-arrow">→</div>
+
+                    <div class="chain-node">
+                        <strong>Product</strong>
+                        <span id="chainProduct">—</span>
+                    </div>
+
+                    <div class="chain-arrow">→</div>
+
+                    <div class="chain-node">
+                        <strong>Warehouse</strong>
+                        <span id="chainWarehouse">—</span>
+                    </div>
+
+                    <div class="chain-arrow">→</div>
+
+                    <div class="chain-node">
+                        <strong>Orders</strong>
+                        <span id="chainOrders">—</span>
+                    </div>
+
+                    <div class="chain-arrow">→</div>
+
+                    <div class="chain-node">
+                        <strong>Customers</strong>
+                        <span id="chainCustomers">—</span>
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <!-- AFFECTED ORDERS -->
+
+            <section class="panel">
+
+                <div class="section-title">
+
+                    <span class="section-icon">
+                        ◎
+                    </span>
+
+                    <div>
+                        <h2>Affected Orders</h2>
+
+                        <p>
+                            Prioritized by urgency and business exposure
+                        </p>
+                    </div>
+
+                </div>
+
+
+                <div class="table-wrapper">
+
+                    <table>
+
+                        <thead>
+
+                            <tr>
+                                <th>ORDER</th>
+                                <th>CUSTOMER</th>
+                                <th>PRODUCT</th>
+                                <th>QTY</th>
+                                <th>SHORTAGE</th>
+                                <th>PRIORITY</th>
+                                <th>URGENCY</th>
+                                <th>VALUE AT RISK</th>
+                            </tr>
+
+                        </thead>
+
+                        <tbody id="ordersTable">
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </section>
+
+
+            <!-- RESPONSE OPTIONS -->
+
+            <section class="panel">
+
+                <div class="section-title">
+
+                    <span class="section-icon">
+                        ◆
+                    </span>
+
+                    <div>
+                        <h2>Response Options</h2>
+
+                        <p>
+                            Available actions and their trade-offs
+                        </p>
+                    </div>
+
+                </div>
+
+
+                <div
+                    id="responseOptions"
+                    class="options-grid"
+                ></div>
+
+            </section>
+
+
+            <!-- RECOMMENDATION -->
+
+            <section
+                id="recommendationPanel"
+                class="panel recommendation-panel"
+            >
+
+                <div class="recommendation-badge">
+                    RECOMMENDED COURSE
+                </div>
+
+                <div class="recommendation-content">
+
+                    <div class="recommendation-icon">
+                        ✓
+                    </div>
+
+                    <div>
+
+                        <h2 id="recommendationTitle">
+                            —
+                        </h2>
+
+                        <p
+                            id="recommendationReasoning"
+                            class="recommendation-reasoning"
+                        >
+                            —
+                        </p>
+
+                        <div
+                            id="recommendationMetrics"
+                            class="recommendation-metrics"
+                        ></div>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <!-- EVIDENCE -->
+
+            <section class="panel">
+
+                <div class="section-title">
+
+                    <span class="section-icon">
+                        ⌕
+                    </span>
+
+                    <div>
+                        <h2>Evidence & Traceability</h2>
+
+                        <p>
+                            Every impact claim is grounded in source data
+                        </p>
+                    </div>
+
+                </div>
+
+
+                <div id="evidenceList" class="evidence-list"></div>
+
+            </section>
+
+        </section>
+
+
+        <!-- =================================================
+             HUMAN REVIEW
+        ================================================== -->
+
+        <section
+            id="reviewState"
+            class="panel review-panel hidden"
+        >
+
+            <div class="review-icon">
+                !
+            </div>
+
+            <div>
+
+                <h2>Human Review Required</h2>
+
+                <p id="reviewMessage">
+                    RippleX could not safely establish business
+                    impact from the provided notice.
+                </p>
+
+                <div
+                    id="resolutionDetails"
+                    class="resolution-details"
+                ></div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+</div>
+
+
+<script src="/static/app.js"></script>
+
+</body>
+</html>

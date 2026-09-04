@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from typing import Any
+
 from backend.impact_engine import ImpactAssessment
 
 
@@ -17,6 +19,26 @@ class ResponseOption:
     tradeoff: str
     feasible: bool
     reason: str
+    evidence: tuple[Any, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "option_type": self.option_type,
+            "title": self.title,
+            "description": self.description,
+            "units_recovered": self.units_recovered,
+            "orders_helped": self.orders_helped,
+            "estimated_cost": self.estimated_cost,
+            "tradeoff": self.tradeoff,
+            "feasible": self.feasible,
+            "reason": self.reason,
+            "evidence": [
+                evidence.to_dict()
+                if hasattr(evidence, "to_dict")
+                else evidence
+                for evidence in self.evidence
+            ],
+        }
 
 
 # ============================================================
@@ -33,6 +55,83 @@ def _calculate_order_units_at_risk(
     )
 
 
+def _count_orders_helped_by_supply(
+    affected_orders,
+    product_id: str,
+    warehouse_id: str,
+    units_available: int,
+) -> int:
+    """
+    Determine how many affected orders at the destination can
+    actually be covered by the recovered units.
+
+    Orders are considered in urgency order.
+    """
+
+    if units_available <= 0:
+        return 0
+
+    orders = [
+        order
+        for order in affected_orders
+        if (
+            order.product_id == product_id
+            and order.warehouse_id == warehouse_id
+            and order.shortage_quantity > 0
+        )
+    ]
+
+    orders.sort(
+        key=lambda order: (
+            -order.urgency_score,
+            order.promised_date or "9999-12-31",
+            -order.order_value_at_risk,
+            order.order_id,
+        )
+    )
+
+    remaining = units_available
+    helped = 0
+
+    for order in orders:
+        if remaining <= 0:
+            break
+
+        covered = min(
+            remaining,
+            order.shortage_quantity,
+        )
+
+        if covered > 0:
+            helped += 1
+            remaining -= covered
+
+    return helped
+
+
+def _make_evidence(
+    source_type: str,
+    source_id: str,
+    description: str,
+):
+    """
+    Reuse the Evidence model from impact_engine without
+    duplicating its implementation.
+    """
+
+    from backend.impact_engine import Evidence
+
+    return Evidence(
+        source_type=source_type,
+        source_id=source_id,
+        description=description,
+    )
+
+
+# ============================================================
+# REALLOCATION
+# ============================================================
+
 def _find_reallocation_opportunities(
     impact: ImpactAssessment,
 ) -> list[ResponseOption]:
@@ -43,7 +142,10 @@ def _find_reallocation_opportunities(
     # 1. Find shortages by PRODUCT + DESTINATION WAREHOUSE
     # --------------------------------------------------------
 
-    shortage_by_product_warehouse: dict[tuple[str, str], int] = {}
+    shortage_by_product_warehouse: dict[
+        tuple[str, str],
+        int,
+    ] = {}
 
     for order in impact.affected_orders:
 
@@ -77,7 +179,7 @@ def _find_reallocation_opportunities(
         ).append(inventory)
 
     # --------------------------------------------------------
-    # 3. Find surplus warehouses
+    # 3. Find genuine surplus warehouses
     # --------------------------------------------------------
 
     for product_id, inventories in inventory_by_product.items():
@@ -86,7 +188,7 @@ def _find_reallocation_opportunities(
             warehouse_id: shortage
             for (
                 pid,
-                warehouse_id
+                warehouse_id,
             ), shortage in shortage_by_product_warehouse.items()
             if (
                 pid == product_id
@@ -101,14 +203,14 @@ def _find_reallocation_opportunities(
 
         for inventory in inventories:
 
-            # Destination warehouses cannot be sources.
+            # A shortage warehouse cannot simultaneously be
+            # treated as a source.
             if inventory.warehouse_id in destinations:
                 continue
 
             if inventory.available_quantity <= 0:
                 continue
 
-            # Calculate this warehouse's pending demand.
             warehouse_demand = sum(
                 order.quantity
                 for order in impact.affected_orders
@@ -118,14 +220,13 @@ def _find_reallocation_opportunities(
                 )
             )
 
-            # Only genuinely surplus inventory can be moved.
             surplus = max(
-                inventory.available_quantity - warehouse_demand,
+                inventory.available_quantity
+                - warehouse_demand,
                 0,
             )
 
             if surplus > 0:
-
                 sources.append(
                     (
                         inventory,
@@ -137,7 +238,7 @@ def _find_reallocation_opportunities(
             continue
 
         # ----------------------------------------------------
-        # 4. Move surplus to shortage warehouses
+        # 4. Allocate source surplus to affected destinations
         # ----------------------------------------------------
 
         remaining_shortage = dict(destinations)
@@ -168,20 +269,46 @@ def _find_reallocation_opportunities(
                 if units_to_move <= 0:
                     continue
 
-                # Count affected orders at destination.
-                orders_helped = sum(
-                    1
-                    for order in impact.affected_orders
-                    if (
-                        order.product_id == product_id
-                        and order.warehouse_id == destination_id
-                        and order.shortage_quantity > 0
-                    )
+                orders_helped = _count_orders_helped_by_supply(
+                    impact.affected_orders,
+                    product_id,
+                    destination_id,
+                    units_to_move,
                 )
 
-                # Demo assumption:
-                # ₹15 transfer cost per unit.
                 estimated_cost = units_to_move * 15
+
+                evidence = (
+                    _make_evidence(
+                        source_type="inventory",
+                        source_id=(
+                            f"{source.warehouse_id}:{product_id}"
+                        ),
+                        description=(
+                            f"{source.warehouse_name} has "
+                            f"{source.available_quantity} available "
+                            f"units of {source.product_name}."
+                        ),
+                    ),
+                    _make_evidence(
+                        source_type="calculation",
+                        source_id=(
+                            f"reallocation:"
+                            f"{source.warehouse_id}:"
+                            f"{destination_id}:"
+                            f"{product_id}"
+                        ),
+                        description=(
+                            f"{source.warehouse_name} has "
+                            f"{source_surplus} units of surplus "
+                            f"{source.product_name} after accounting "
+                            f"for its pending demand. "
+                            f"{destination_id} has "
+                            f"{destination_shortage} units of "
+                            f"shortage."
+                        ),
+                    ),
+                )
 
                 opportunities.append(
                     ResponseOption(
@@ -197,8 +324,8 @@ def _find_reallocation_opportunities(
                             f"Move {units_to_move} units of "
                             f"{source.product_name} from "
                             f"{source.warehouse_name} to "
-                            f"the warehouse serving "
-                            f"affected customer orders."
+                            f"the warehouse serving affected "
+                            f"customer orders."
                         ),
 
                         units_recovered=units_to_move,
@@ -211,9 +338,9 @@ def _find_reallocation_opportunities(
                             f"Uses existing surplus inventory at "
                             f"{source.warehouse_name}, avoiding "
                             f"dependence on the disrupted shipment. "
-                            f"Trade-off: ₹{estimated_cost:,.0f} transfer "
-                            f"cost and a smaller inventory buffer "
-                            f"at the source warehouse."
+                            f"Trade-off: ₹{estimated_cost:,.0f} "
+                            f"transfer cost and a smaller inventory "
+                            f"buffer at the source warehouse."
                         ),
 
                         feasible=True,
@@ -228,6 +355,8 @@ def _find_reallocation_opportunities(
                             f"{destination_shortage} units "
                             f"of demand at risk."
                         ),
+
+                        evidence=evidence,
                     )
                 )
 
@@ -279,16 +408,79 @@ def generate_response_options(
         total_units_at_risk,
     )
 
-    orders_helped_by_expedite = sum(
-        1
-        for order in affected_orders
-        if order.shortage_quantity > 0
-    )
+    # --------------------------------------------------------
+    # Determine which orders the recovered supply can cover.
+    #
+    # Shipment supply is mapped to the product + destination
+    # warehouse instead of blindly claiming that every affected
+    # order benefits.
+    # --------------------------------------------------------
+
+    remaining_recovery = expedite_units_recovered
+    orders_helped_by_expedite = 0
+
+    for shipment in expedited_shipments:
+
+        if remaining_recovery <= 0:
+            break
+
+        shipment_orders = [
+            order
+            for order in affected_orders
+            if (
+                order.product_id == shipment.product_id
+                and order.warehouse_id == shipment.warehouse_id
+                and order.shortage_quantity > 0
+            )
+        ]
+
+        shipment_orders.sort(
+            key=lambda order: (
+                -order.urgency_score,
+                order.promised_date or "9999-12-31",
+                -order.order_value_at_risk,
+                order.order_id,
+            )
+        )
+
+        shipment_recovery = min(
+            shipment.quantity,
+            remaining_recovery,
+        )
+
+        for order in shipment_orders:
+
+            if shipment_recovery <= 0:
+                break
+
+            covered = min(
+                shipment_recovery,
+                order.shortage_quantity,
+            )
+
+            if covered > 0:
+                orders_helped_by_expedite += 1
+                shipment_recovery -= covered
+                remaining_recovery -= covered
 
     # Demo assumption:
     # ₹25 per expedited unit.
     expedite_cost = (
         expedite_units_recovered * 25
+    )
+
+    expedite_evidence = tuple(
+        _make_evidence(
+            source_type="shipment",
+            source_id=shipment.shipment_id,
+            description=(
+                f"{shipment.shipment_id} contains "
+                f"{shipment.quantity} units of "
+                f"{shipment.product_name} destined for "
+                f"{shipment.warehouse_name}."
+            ),
+        )
+        for shipment in expedited_shipments
     )
 
     options.append(
@@ -322,12 +514,16 @@ def generate_response_options(
 
             feasible=(
                 expedite_units_recovered > 0
+                and orders_helped_by_expedite > 0
             ),
 
             reason=(
-                "Affected incoming shipment quantity "
-                "is available for expedited recovery."
+                "Affected incoming shipment quantity is "
+                "available for expedited recovery and can "
+                "be mapped to affected orders."
             ),
+
+            evidence=expedite_evidence,
         )
     )
 
@@ -346,6 +542,24 @@ def generate_response_options(
 
     part_ship_orders = sum(
         1
+        for order in affected_orders
+        if (
+            0 < order.shortage_quantity
+            < order.quantity
+        )
+    )
+
+    part_ship_evidence = tuple(
+        _make_evidence(
+            source_type="order",
+            source_id=order.order_id,
+            description=(
+                f"{order.order_id} can receive "
+                f"{order.quantity - order.shortage_quantity} "
+                f"units immediately, with "
+                f"{order.shortage_quantity} units exposed."
+            ),
+        )
         for order in affected_orders
         if (
             0 < order.shortage_quantity
@@ -389,12 +603,26 @@ def generate_response_options(
                 "partially fulfilled using currently "
                 "available inventory."
             ),
+
+            evidence=part_ship_evidence,
         )
     )
 
     # ========================================================
     # OPTION 3 — CUSTOMER NOTIFICATION
     # ========================================================
+
+    notification_evidence = tuple(
+        _make_evidence(
+            source_type="order",
+            source_id=order.order_id,
+            description=(
+                f"{order.order_id} for {order.customer_name} "
+                f"is currently affected by the disruption."
+            ),
+        )
+        for order in affected_orders
+    )
 
     options.append(
         ResponseOption(
@@ -429,6 +657,8 @@ def generate_response_options(
                 "Affected customer orders "
                 "have been identified."
             ),
+
+            evidence=notification_evidence,
         )
     )
 
@@ -459,11 +689,7 @@ def print_response_options(
     print("=" * 60)
 
     if not options:
-
-        print(
-            "No response options available."
-        )
-
+        print("No response options available.")
         return
 
     for index, option in enumerate(
@@ -548,6 +774,9 @@ if __name__ == "__main__":
                 warehouse_id="WH001",
                 warehouse_name="Bangalore Central",
                 shortage_quantity=40,
+                urgency_score=90,
+                promised_date="2026-09-08",
+                order_value_at_risk=34000,
             ),
 
             SimpleNamespace(
@@ -559,13 +788,15 @@ if __name__ == "__main__":
                 warehouse_id="WH001",
                 warehouse_name="Bangalore Central",
                 shortage_quantity=30,
+                urgency_score=85,
+                promised_date="2026-09-10",
+                order_value_at_risk=25500,
             ),
 
         ],
 
         inventory_impacts=[
 
-            # Short warehouse
             SimpleNamespace(
                 product_id="P001",
                 product_name="X-200",
@@ -574,7 +805,6 @@ if __name__ == "__main__":
                 available_quantity=25,
             ),
 
-            # Surplus warehouse
             SimpleNamespace(
                 product_id="P001",
                 product_name="X-200",
