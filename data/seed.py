@@ -214,19 +214,24 @@ def seed_data():
     # ENGINEERED INVENTORY SCENARIOS
     # ============================================================
     #
-    # These are NOT hardcoded into the application logic.
+    # These scenarios exist only in the synthetic database.
+    # The application logic remains completely generic.
     #
-    # They simply make the synthetic company's data realistic enough
-    # to exercise different disruption scenarios.
+    # Scenario 1:
+    # ABC Components / X-200 / Bangalore
     #
-    # P001 / X-200:
-    # Deliberately low available stock at Bangalore.
+    # Available = 35 - 10 = 25
     #
-    # P002 / X-300:
-    # Deliberately healthy stock at Bangalore.
+    # Scenario 2:
+    # Global Parts / Y-100 / Chennai
     #
-    # This lets the same supplier disruption affect X-200 strongly
-    # while X-300 remains protected by existing inventory.
+    # Available = 30 - 5 = 25
+    #
+    # Scenario 3:
+    # Nova Supplies / Z-100 / Mumbai
+    #
+    # Available = 25 - 5 = 20
+    #
     # ============================================================
 
     cursor.execute("""
@@ -237,6 +242,8 @@ def seed_data():
           AND product_id = 'P001'
     """)
 
+    # X-300 remains intentionally well stocked.
+    # This is the protected control case.
     cursor.execute("""
         UPDATE inventory
         SET quantity = 220,
@@ -244,15 +251,33 @@ def seed_data():
         WHERE warehouse_id = 'WH001'
           AND product_id = 'P002'
     """)
-    cursor.execute("""
-            UPDATE inventory
-            SET quantity = 90,
-                reserved_quantity = 10
-            WHERE warehouse_id = 'WH002'
-              AND product_id = 'P001'
-        """)
 
-    
+    # X-200 at Chennai — additional inventory location.
+    cursor.execute("""
+        UPDATE inventory
+        SET quantity = 90,
+            reserved_quantity = 10
+        WHERE warehouse_id = 'WH002'
+          AND product_id = 'P001'
+    """)
+
+    # Global Parts / Y-100 / Chennai
+    cursor.execute("""
+        UPDATE inventory
+        SET quantity = 30,
+            reserved_quantity = 5
+        WHERE warehouse_id = 'WH002'
+          AND product_id = 'P004'
+    """)
+
+    # Nova Supplies / Z-100 / Mumbai
+    cursor.execute("""
+        UPDATE inventory
+        SET quantity = 25,
+            reserved_quantity = 5
+        WHERE warehouse_id = 'WH003'
+          AND product_id = 'P007'
+    """)
 
     # ============================================================
     # SHIPMENTS
@@ -379,17 +404,34 @@ def seed_data():
     # ENGINEERED CUSTOMER ORDERS
     # ============================================================
     #
-    # These orders intentionally depend on X-200 at WH001.
+    # Three deterministic risk scenarios are included so the demo
+    # can test disruptions from different suppliers.
     #
-    # Available X-200:
-    #     35 - 10 reserved = 25 units
+    # Scenario 1:
+    # ABC Components / X-200 / WH001
     #
-    # Pending X-200 demand created here:
-    #     40 + 30 + 25 = 95 units
+    # Available = 25 units
+    # Engineered demand = 95 units
+    # Guaranteed shortage.
     #
-    # Therefore the disruption to SH001 creates a real shortage.
+    # Scenario 2:
+    # Global Parts / Y-100 / WH002
     #
-    # The random background orders remain in the dataset as well.
+    # Available = 25 units
+    # Engineered demand = 60 units
+    # Guaranteed shortage.
+    #
+    # Scenario 3:
+    # Nova Supplies / Z-100 / WH003
+    #
+    # Available = 20 units
+    # Engineered demand = 50 units
+    # Guaranteed shortage.
+    #
+    # ============================================================
+
+    # ============================================================
+    # SCENARIO 1 — ABC COMPONENTS / X-200
     # ============================================================
 
     x200_orders = [
@@ -434,17 +476,92 @@ def seed_data():
     """, x200_orders)
 
     # ============================================================
+    # SCENARIO 2 — GLOBAL PARTS / Y-100
+    # ============================================================
+
+    y100_orders = [
+        (
+            "ORD107",
+            "Chennai Medical Systems",
+            "P004",
+            35,
+            "WH002",
+            str(today + timedelta(days=3)),
+            "HIGH",
+            35 * 550,
+            "PENDING",
+        ),
+        (
+            "ORD108",
+            "Southern Retail Network",
+            "P004",
+            25,
+            "WH002",
+            str(today + timedelta(days=6)),
+            "MEDIUM",
+            25 * 550,
+            "PENDING",
+        ),
+    ]
+
+    cursor.executemany("""
+        INSERT INTO orders
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, y100_orders)
+
+    # ============================================================
+    # SCENARIO 3 — NOVA SUPPLIES / Z-100
+    # ============================================================
+
+    z100_orders = [
+        (
+            "ORD109",
+            "Westline Components",
+            "P007",
+            30,
+            "WH003",
+            str(today + timedelta(days=4)),
+            "HIGH",
+            30 * 450,
+            "PENDING",
+        ),
+        (
+            "ORD110",
+            "Mumbai Industrial Retail",
+            "P007",
+            20,
+            "WH003",
+            str(today + timedelta(days=9)),
+            "MEDIUM",
+            20 * 450,
+            "PENDING",
+        ),
+    ]
+
+    cursor.executemany("""
+        INSERT INTO orders
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, z100_orders)
+
+    # ============================================================
     # CONTROLLED X-300 ORDERS
     # ============================================================
     #
-    # X-300 has 200 available units after the inventory adjustment.
-    # These orders total only 60 units, so the same disruption should
-    # NOT create an X-300 shortage.
+    # X-300 has:
     #
-    # This gives us a useful demonstration:
+    #     220 - 20 = 200 available units
     #
-    #   X-200 -> affected
-    #   X-300 -> protected by existing inventory
+    # These orders total:
+    #
+    #     25 + 20 + 15 = 60 units
+    #
+    # Therefore an ABC Components disruption affecting X-300
+    # should NOT create a shortage.
+    #
+    # This acts as a protected control case:
+    #
+    #     X-200 -> affected
+    #     X-300 -> protected by existing inventory
     #
     # ============================================================
 

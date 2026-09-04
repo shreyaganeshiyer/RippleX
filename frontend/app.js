@@ -660,6 +660,9 @@ function renderResponseOptions(
 function renderRecommendation(
     recommendation
 ) {
+     window.ripplexLastRecommendation =
+
+        recommendation || null;
 
     const panel = document.getElementById(
         "recommendationPanel"
@@ -731,91 +734,267 @@ function renderRecommendation(
 // ============================================================
 
 function renderEvidence(impact, options) {
+    const container = document.getElementById("evidenceList");
 
-    const container = document.getElementById(
-        "evidenceList"
-    );
+    const groups = {
+        "Supply": [],
+        "Inventory": [],
+        "Customer Impact": [],
+        "Response": [],
+        "Recommendation": [],
+        "Impact": []
+    };
 
-    let evidence = [];
+    // ------------------------------------------------------------
+    // Collect evidence
+    // ------------------------------------------------------------
 
-    if (impact.evidence) {
-        evidence.push(
-            ...impact.evidence
-        );
+    for (const item of impact?.evidence || []) {
+        groups["Impact"].push(item);
     }
 
-    for (const order of (
-        impact.affected_orders || []
-    )) {
-
-        evidence.push(
-            ...(order.evidence || [])
-        );
-    }
-
-    for (const option of options) {
-
-        evidence.push(
-            ...(option.evidence || [])
-        );
-    }
-
-    // Remove duplicate evidence entries.
-
-    const unique = [];
-
-    const seen = new Set();
-
-    for (const item of evidence) {
-
-        const key =
-            `${item.source_type}|${item.source_id}|${item.description}`;
-
-        if (!seen.has(key)) {
-
-            seen.add(key);
-
-            unique.push(item);
+    for (const shipment of impact?.affected_shipments || []) {
+        for (const item of shipment.evidence || []) {
+            groups["Supply"].push(item);
         }
     }
 
-    if (!unique.length) {
+    for (const inventory of impact?.inventory_impacts || []) {
+        for (const item of inventory.evidence || []) {
+            groups["Inventory"].push(item);
+        }
+    }
 
+    for (const order of impact?.affected_orders || []) {
+        for (const item of order.evidence || []) {
+            groups["Customer Impact"].push(item);
+        }
+    }
+
+    for (const option of options || []) {
+        for (const item of option.evidence || []) {
+            groups["Response"].push(item);
+        }
+    }
+
+    const recommendation = window.ripplexLastRecommendation;
+
+    for (const item of recommendation?.evidence || []) {
+        groups["Recommendation"].push(item);
+    }
+
+    // ------------------------------------------------------------
+    // Deduplicate
+    // ------------------------------------------------------------
+
+    for (const category of Object.keys(groups)) {
+        const seen = new Set();
+
+        groups[category] = groups[category].filter(item => {
+            const key = [
+                item.source_type,
+                item.source_id,
+                item.description
+            ].join("|");
+
+            if (seen.has(key)) {
+                return false;
+            }
+
+            seen.add(key);
+            return true;
+        });
+    }
+
+    // ------------------------------------------------------------
+    // Metadata
+    // ------------------------------------------------------------
+
+    const categoryMeta = {
+        "Supply": {
+            icon: "↗",
+            label: "Supply disruption",
+            description: "Affected shipments and incoming supply"
+        },
+
+        "Inventory": {
+            icon: "▣",
+            label: "Inventory impact",
+            description: "Warehouse stock supporting the assessment"
+        },
+
+        "Customer Impact": {
+            icon: "◎",
+            label: "Customer impact",
+            description: "Orders with quantified exposure"
+        },
+
+        "Response": {
+            icon: "◆",
+            label: "Response analysis",
+            description: "Evidence behind available response options"
+        },
+
+        "Recommendation": {
+            icon: "★",
+            label: "Recommendation",
+            description: "Evidence supporting the selected response"
+        },
+
+        "Impact": {
+            icon: "⌁",
+            label: "Impact calculation",
+            description: "Deterministic calculations from supply-chain data"
+        }
+    };
+
+    // ------------------------------------------------------------
+    // Choose only the most useful evidence
+    // ------------------------------------------------------------
+
+    function selectUsefulEvidence(category, items) {
+        if (!items.length) {
+            return [];
+        }
+
+        // Keep the most important records visible.
+        // The rest remain represented by the "+ X more" indicator.
+        if (category === "Supply") {
+            return items.slice(0, 3);
+        }
+
+        if (category === "Inventory") {
+            return items.slice(0, 2);
+        }
+
+        if (category === "Customer Impact") {
+            return items.slice(0, 3);
+        }
+
+        if (category === "Response") {
+            return items.slice(0, 4);
+        }
+
+        if (category === "Recommendation") {
+            return items.slice(0, 2);
+        }
+
+        if (category === "Impact") {
+            return items.slice(0, 3);
+        }
+
+        return items.slice(0, 2);
+    }
+
+    // ------------------------------------------------------------
+    // Render
+    // ------------------------------------------------------------
+
+    const visibleGroups = Object.entries(groups)
+        .filter(([, items]) => items.length > 0);
+
+    if (!visibleGroups.length) {
         container.innerHTML = `
-            <div class="evidence-description">
-                No evidence records returned.
+            <div class="evidence-empty">
+                <div class="evidence-empty-icon">✓</div>
+                <div>
+                    <strong>No evidence records returned</strong>
+                    <span>
+                        The analysis did not produce traceable source records.
+                    </span>
+                </div>
             </div>
         `;
-
         return;
     }
 
-    container.innerHTML = unique.map(
-        item => `
+    container.innerHTML = visibleGroups
+        .map(([category, items]) => {
+            const meta = categoryMeta[category];
+            const visibleItems = selectUsefulEvidence(category, items);
+            const remaining = items.length - visibleItems.length;
 
-            <div class="evidence-item">
+            return `
+                <section class="evidence-group">
 
-                <div class="evidence-type">
-                    ${escapeHtml(
-                        item.source_type
-                    )}
-                </div>
+                    <div class="evidence-group-header">
 
-                <div class="evidence-id">
-                    ${escapeHtml(
-                        item.source_id
-                    )}
-                </div>
+                        <div class="evidence-group-title">
 
-                <div class="evidence-description">
-                    ${escapeHtml(
-                        item.description
-                    )}
-                </div>
+                            <div class="evidence-group-icon">
+                                ${meta.icon}
+                            </div>
 
-            </div>
-        `
-    ).join("");
+                            <div>
+                                <div class="evidence-group-name">
+                                    ${escapeHtml(meta.label)}
+                                </div>
+
+                                <div class="evidence-group-description">
+                                    ${escapeHtml(meta.description)}
+                                </div>
+                            </div>
+
+                        </div>
+
+                        <div class="evidence-count">
+                            ${items.length}
+                            ${items.length === 1 ? "source" : "sources"}
+                        </div>
+
+                    </div>
+
+                    <div class="evidence-group-items">
+
+                        ${visibleItems.map(item => `
+                            <article class="evidence-card">
+
+                                <div class="evidence-card-top">
+
+                                    <span class="evidence-source-type">
+                                        ${escapeHtml(
+                                            String(
+                                                item.source_type || "SOURCE"
+                                            ).toUpperCase()
+                                        )}
+                                    </span>
+
+                                    <span class="evidence-source-id">
+                                        ${escapeHtml(
+                                            item.source_id || "—"
+                                        )}
+                                    </span>
+
+                                </div>
+
+                                <div class="evidence-card-description">
+                                    ${escapeHtml(
+                                        item.description ||
+                                        "No description available."
+                                    )}
+                                </div>
+
+                            </article>
+                        `).join("")}
+
+                        ${
+                            remaining > 0
+                                ? `
+                                    <div class="evidence-more">
+                                        + ${remaining} more
+                                        ${remaining === 1 ? "source" : "sources"}
+                                        available in the analysis
+                                    </div>
+                                  `
+                                : ""
+                        }
+
+                    </div>
+
+                </section>
+            `;
+        })
+        .join("");
 }
 
 

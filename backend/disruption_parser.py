@@ -3,7 +3,12 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
 load_dotenv()
 
@@ -17,92 +22,222 @@ if not api_key:
 client = genai.Client(api_key=api_key)
 
 
-# ---------------------------------------------------------
-# Structured output schema
-# ---------------------------------------------------------
+# ============================================================
+# STRUCTURED OUTPUT SCHEMA
+# ============================================================
+
 
 class DisruptionEvent(BaseModel):
+    """
+    Facts extracted from an unstructured disruption notice.
+
+    This model represents what the notice says.
+    It does not represent calculated business impact.
+    """
+
     event_type: str = Field(
         description=(
-            "Type of disruption, such as supplier_production_halt, "
-            "carrier_delay, warehouse_incident, or other."
+            "Type of disruption, such as "
+            "supplier_production_halt, carrier_delay, "
+            "warehouse_incident, shipment_delay, or other."
         )
     )
 
     supplier_name: Optional[str] = Field(
         default=None,
-        description="Supplier mentioned in the notice, if any."
+        description=(
+            "Supplier company explicitly mentioned in the notice."
+        ),
     )
 
     location: Optional[str] = Field(
         default=None,
-        description="Location mentioned in the notice, if any."
+        description=(
+            "Physical location explicitly mentioned in the notice."
+        ),
     )
 
     affected_products: list[str] = Field(
         default_factory=list,
         description=(
-            "Product names or product identifiers explicitly "
-            "mentioned in the notice."
-        )
+            "Only product names or product identifiers explicitly "
+            "affected by the disruption. Do not include shipment IDs, "
+            "order IDs, warehouse IDs, supplier IDs, or descriptive "
+            "words such as 'components', 'products', or 'items'. "
+            "For example, extract 'Y-100' rather than "
+            "'Y-100 components'."
+        ),
+    )
+
+    affected_shipments: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Shipment IDs explicitly mentioned in the notice, such "
+            "as SH001 or SH002. These must never be placed in "
+            "affected_products."
+        ),
     )
 
     delay_days: Optional[int] = Field(
         default=None,
         description=(
-            "Expected delay in days if explicitly stated or "
-            "clearly inferable from the notice."
-        )
+            "Expected delay in days when explicitly stated or "
+            "clearly stated as an approximate duration."
+        ),
     )
 
     summary: str = Field(
-        description="Short factual summary of what happened."
+        description=(
+            "Short factual summary of the disruption without "
+            "adding information that is not present in the notice."
+        ),
     )
 
     confidence: float = Field(
         description=(
-            "Confidence from 0 to 1 in the extracted information."
-        )
+            "Confidence from 0 to 1 in the extraction. "
+            "Lower confidence when the notice is ambiguous."
+        ),
     )
 
+    @field_validator("confidence")
+    @classmethod
+    def validate_confidence(
+        cls,
+        value: float,
+    ) -> float:
+        return max(0.0, min(1.0, value))
 
-# ---------------------------------------------------------
-# Parser
-# ---------------------------------------------------------
 
-def parse_disruption(notice: str) -> DisruptionEvent:
+# ============================================================
+# PARSER
+# ============================================================
+
+
+def parse_disruption(
+    notice: str,
+) -> DisruptionEvent:
+    """
+    Extract structured disruption facts from an unstructured notice.
+
+    Gemini is used only for language understanding.
+
+    It does NOT:
+        - calculate business impact
+        - inspect the database
+        - identify affected orders
+        - calculate shortages
+        - recommend actions
+        - invent entities
+    """
+
+    cleaned_notice = notice.strip()
+
+    if not cleaned_notice:
+        raise ValueError(
+            "Disruption notice cannot be empty."
+        )
 
     prompt = f"""
-You are the disruption extraction component of RippleX,
-a supply-chain disruption response system.
+You are the structured extraction component of RippleX,
+an AI supply-chain disruption response system.
 
-Your job is ONLY to extract facts from the disruption notice.
+Your ONLY task is to extract factual information explicitly
+contained in the disruption notice.
 
-Do NOT:
-- calculate business impact
-- identify affected orders
-- calculate inventory shortages
-- recommend actions
-- invent missing information
-- assume a supplier or product exists in our database
+IMPORTANT ENTITY RULES:
 
-If something is not present in the notice, return null
-for optional fields or an empty list where appropriate.
+1. SUPPLIERS
+   Extract the supplier company name exactly as it appears
+   in the notice.
 
-If the notice is ambiguous, preserve the ambiguity rather
-than guessing.
+2. PRODUCTS
+   Extract ONLY actual product names or product identifiers.
 
-Extract:
-- disruption type
-- supplier
-- location
-- affected products
-- expected delay
-- factual summary
-- confidence
+   If the notice says:
+       "Y-100 components"
+   extract:
+       "Y-100"
+
+   If the notice says:
+       "X-200 products"
+   extract:
+       "X-200"
+
+   Remove generic descriptive suffixes such as:
+       components
+       products
+       product
+       items
+       units
+       parts
+
+   Do NOT invent or transform the actual product identifier.
+
+3. SHIPMENTS
+   Shipment identifiers look like:
+       SH001
+       SH002
+       SH123
+
+   Put shipment identifiers ONLY in affected_shipments.
+
+   NEVER put shipment IDs inside affected_products.
+
+4. ORDERS
+   Order identifiers look like:
+       ORD001
+       ORD101
+
+   Do not put order IDs in affected_products or
+   affected_shipments.
+
+5. WAREHOUSES
+   Warehouse identifiers look like:
+       WH001
+       WH002
+
+   Do not put warehouse IDs in affected_products.
+
+6. SUPPLIER IDS
+   Identifiers such as SUP001 are supplier IDs, not products.
+
+7. DO NOT GUESS
+   Do not assume that an entity exists in RippleX's database.
+   Do not convert an ambiguous phrase into a specific entity.
+
+8. AMBIGUITY
+   If the notice says something broad such as:
+       "X-series"
+   preserve it as written rather than guessing which
+   specific product it means.
+
+9. BUSINESS IMPACT
+   Do NOT calculate:
+       - affected orders
+       - inventory shortages
+       - units at risk
+       - order value at risk
+       - response options
+       - recommendations
+
+10. SHIPMENT DISCOVERY
+    If the notice mentions a supplier and product but does not
+    explicitly mention shipment IDs, leave affected_shipments
+    empty.
+
+    RippleX's deterministic backend will discover affected
+    shipments from its own database.
+
+11. SUMMARY
+    The summary must contain only facts stated in the notice.
+
+12. CONFIDENCE
+    Return a value between 0 and 1 representing confidence
+    in the extraction itself.
 
 DISRUPTION NOTICE:
-{notice}
+{cleaned_notice}
 """
 
     response = client.models.generate_content(
@@ -114,31 +249,11 @@ DISRUPTION NOTICE:
         },
     )
 
-    return DisruptionEvent.model_validate_json(response.text)
+    if not response.text:
+        raise ValueError(
+            "Gemini returned an empty extraction response."
+        )
 
-
-# ---------------------------------------------------------
-# Test
-# ---------------------------------------------------------
-
-if __name__ == "__main__":
-
-    notice = """
-    Hi team,
-
-    Due to an unexpected production issue at our Bangalore
-    facility, we won't be able to dispatch the X-200 and X-300
-    orders scheduled this week.
-
-    We expect operations to resume in around 10 days.
-
-    Regards,
-    ABC Components
-    """
-
-    result = parse_disruption(notice)
-
-    print("\nRippleX Disruption Parser")
-    print("=" * 40)
-
-    print(result.model_dump_json(indent=2))
+    return DisruptionEvent.model_validate_json(
+        response.text
+    )

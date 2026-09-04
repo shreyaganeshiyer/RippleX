@@ -24,7 +24,7 @@
 
         <div class="brand">
 
-            <div class="brand-mark">
+            <div class="brand-mark" aria-hidden="true">
                 <span class="node node-top"></span>
                 <span class="node node-left"></span>
                 <span class="node node-right"></span>
@@ -33,8 +33,9 @@
                 <span class="line line-right"></span>
             </div>
 
-            <div>
+            <div class="brand-copy">
                 <div class="brand-name">RippleX</div>
+
                 <div class="brand-subtitle">
                     AI Supply Chain Disruption Command Center
                 </div>
@@ -44,13 +45,23 @@
 
         <div class="header-right">
 
-            <div id="currentTime" class="timestamp">
+            <div
+                id="currentTime"
+                class="timestamp"
+                aria-label="Current time"
+            >
                 -- --- ---- · --:-- IST
             </div>
 
-            <div id="backendStatus" class="status-pill checking">
+            <div
+                id="backendStatus"
+                class="status-pill checking"
+                role="status"
+            >
                 <span class="status-dot"></span>
-                <span id="statusText">Checking backend</span>
+                <span id="statusText">
+                    Checking backend
+                </span>
             </div>
 
         </div>
@@ -59,19 +70,22 @@
 
 
     <!-- =====================================================
-         MAIN
+         MAIN CONTENT
     ====================================================== -->
 
     <main class="main-content">
 
-        <!-- ANALYZE CARD -->
+
+        <!-- =================================================
+             DISRUPTION INPUT
+        ================================================== -->
 
         <section class="panel analyze-panel">
 
             <div class="panel-heading">
 
-                <div class="heading-icon">
-                    ⚡
+                <div class="heading-icon" aria-hidden="true">
+                    ϟ
                 </div>
 
                 <div>
@@ -94,31 +108,40 @@
 
                 <textarea
                     id="notice"
-                    placeholder="Example:
-Due to an unexpected production issue at our Bangalore facility, we won't be able to dispatch the X-200 and X-300 orders scheduled this week. We expect operations to resume in around 10 days."
+                    autocomplete="off"
+                    spellcheck="true"
+                    placeholder="Paste a disruption notice here..."
                 ></textarea>
+
+                <div class="input-hint">
+                    RippleX will extract the disruption,
+                    resolve it against supply-chain data,
+                    and quantify downstream impact.
+                </div>
 
             </div>
 
 
             <div class="analyze-actions">
-
                 <button
                     id="analyzeButton"
                     class="primary-button"
-                >
-                    <span>⚡</span>
+                    type="button">
+                    <span aria-hidden="true">⌕</span>
                     Analyze Disruption
                 </button>
 
             </div>
 
+
             <div
                 id="errorMessage"
                 class="error-message hidden"
+                role="alert"
             ></div>
 
         </section>
+
 
 
         <!-- =================================================
@@ -128,31 +151,53 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
         <section
             id="results"
             class="results hidden"
+            aria-live="polite"
         >
 
-            <!-- EVENT -->
+
+            <!-- =============================================
+                 UNDERSTOOD EVENT
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
-                    <span class="section-icon">◈</span>
+
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
+                        ◈
+                    </span>
 
                     <div>
                         <h2>Understood Event</h2>
+
                         <p>
                             What RippleX extracted from the notice
                         </p>
                     </div>
+
                 </div>
 
-                <div id="eventContent" class="event-grid"></div>
+
+                <div
+                    id="eventContent"
+                    class="event-grid"
+                ></div>
 
             </section>
 
 
-            <!-- IMPACT KPIs -->
 
-            <section class="kpi-grid">
+            <!-- =============================================
+                 IMPACT KPIs
+            ============================================== -->
+
+            <section
+                class="kpi-grid"
+                aria-label="Business impact summary"
+            >
 
                 <div class="kpi-card danger">
 
@@ -236,21 +281,33 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- IMPACT SUMMARY -->
+
+            <!-- =============================================
+                 BUSINESS IMPACT
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
-                    <span class="section-icon">⚠</span>
+
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
+                        ⚠
+                    </span>
 
                     <div>
                         <h2>Business Impact</h2>
+
                         <p>
                             Deterministic impact calculated from
                             RippleX supply-chain data
                         </p>
                     </div>
+
                 </div>
+
 
                 <div
                     id="impactSummary"
@@ -260,13 +317,19 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- IMPACT CHAIN -->
+
+            <!-- =============================================
+                 IMPACT CHAIN
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
 
-                    <span class="section-icon">
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
                         ⇢
                     </span>
 
@@ -285,43 +348,108 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
                 <div class="impact-chain">
 
                     <div class="chain-node">
+
                         <strong>Supplier</strong>
-                        <span id="chainSupplier">—</span>
+
+                        <span id="chainSupplier">
+                            —
+                        </span>
+
                     </div>
 
-                    <div class="chain-arrow">→</div>
+
+                    <div
+                        class="chain-arrow"
+                        aria-hidden="true"
+                    >
+                        →
+                    </div>
+
 
                     <div class="chain-node">
+
                         <strong>Shipment</strong>
-                        <span id="chainShipment">—</span>
+
+                        <span id="chainShipment">
+                            —
+                        </span>
+
                     </div>
 
-                    <div class="chain-arrow">→</div>
+
+                    <div
+                        class="chain-arrow"
+                        aria-hidden="true"
+                    >
+                        →
+                    </div>
+
 
                     <div class="chain-node">
+
                         <strong>Product</strong>
-                        <span id="chainProduct">—</span>
+
+                        <span id="chainProduct">
+                            —
+                        </span>
+
                     </div>
 
-                    <div class="chain-arrow">→</div>
+
+                    <div
+                        class="chain-arrow"
+                        aria-hidden="true"
+                    >
+                        →
+                    </div>
+
 
                     <div class="chain-node">
+
                         <strong>Warehouse</strong>
-                        <span id="chainWarehouse">—</span>
+
+                        <span id="chainWarehouse">
+                            —
+                        </span>
+
                     </div>
 
-                    <div class="chain-arrow">→</div>
+
+                    <div
+                        class="chain-arrow"
+                        aria-hidden="true"
+                    >
+                        →
+                    </div>
+
 
                     <div class="chain-node">
+
                         <strong>Orders</strong>
-                        <span id="chainOrders">—</span>
+
+                        <span id="chainOrders">
+                            —
+                        </span>
+
                     </div>
 
-                    <div class="chain-arrow">→</div>
+
+                    <div
+                        class="chain-arrow"
+                        aria-hidden="true"
+                    >
+                        →
+                    </div>
+
 
                     <div class="chain-node">
+
                         <strong>Customers</strong>
-                        <span id="chainCustomers">—</span>
+
+                        <span id="chainCustomers">
+                            —
+                        </span>
+
                     </div>
 
                 </div>
@@ -329,13 +457,19 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- AFFECTED ORDERS -->
+
+            <!-- =============================================
+                 AFFECTED ORDERS
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
 
-                    <span class="section-icon">
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
                         ◎
                     </span>
 
@@ -369,6 +503,7 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
 
                         </thead>
 
+
                         <tbody id="ordersTable">
                         </tbody>
 
@@ -379,13 +514,19 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- RESPONSE OPTIONS -->
+
+            <!-- =============================================
+                 RESPONSE OPTIONS
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
 
-                    <span class="section-icon">
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
                         ◆
                     </span>
 
@@ -408,7 +549,10 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- RECOMMENDATION -->
+
+            <!-- =============================================
+                 RECOMMENDATION
+            ============================================== -->
 
             <section
                 id="recommendationPanel"
@@ -419,11 +563,16 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
                     RECOMMENDED COURSE
                 </div>
 
+
                 <div class="recommendation-content">
 
-                    <div class="recommendation-icon">
+                    <div
+                        class="recommendation-icon"
+                        aria-hidden="true"
+                    >
                         ✓
                     </div>
+
 
                     <div>
 
@@ -431,12 +580,14 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
                             —
                         </h2>
 
+
                         <p
                             id="recommendationReasoning"
                             class="recommendation-reasoning"
                         >
                             —
                         </p>
+
 
                         <div
                             id="recommendationMetrics"
@@ -450,32 +601,45 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
             </section>
 
 
-            <!-- EVIDENCE -->
+
+            <!-- =============================================
+                 EVIDENCE & TRACEABILITY
+            ============================================== -->
 
             <section class="panel">
 
                 <div class="section-title">
 
-                    <span class="section-icon">
+                    <span
+                        class="section-icon"
+                        aria-hidden="true"
+                    >
                         ⌕
                     </span>
 
                     <div>
+
                         <h2>Evidence & Traceability</h2>
 
                         <p>
                             Every impact claim is grounded in source data
                         </p>
+
                     </div>
 
                 </div>
 
 
-                <div id="evidenceList" class="evidence-list"></div>
+                <div
+                    id="evidenceList"
+                    class="evidence-list"
+                ></div>
 
             </section>
 
+
         </section>
+
 
 
         <!-- =================================================
@@ -485,20 +649,29 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
         <section
             id="reviewState"
             class="panel review-panel hidden"
+            aria-live="polite"
         >
 
-            <div class="review-icon">
+            <div
+                class="review-icon"
+                aria-hidden="true"
+            >
                 !
             </div>
 
+
             <div>
 
-                <h2>Human Review Required</h2>
+                <h2>
+                    Human Review Required
+                </h2>
+
 
                 <p id="reviewMessage">
                     RippleX could not safely establish business
                     impact from the provided notice.
                 </p>
+
 
                 <div
                     id="resolutionDetails"
@@ -513,6 +686,10 @@ Due to an unexpected production issue at our Bangalore facility, we won't be abl
 
 </div>
 
+
+<!-- =========================================================
+     APPLICATION SCRIPT
+========================================================== -->
 
 <script src="/static/app.js"></script>
 

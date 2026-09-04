@@ -108,12 +108,15 @@ def get_inventory(product_id):
             w.name AS warehouse_name,
             w.location,
             i.product_id,
+            p.name AS product_name,
             i.quantity,
             i.reserved_quantity,
             (i.quantity - i.reserved_quantity) AS available_quantity
         FROM inventory i
         JOIN warehouses w
             ON i.warehouse_id = w.warehouse_id
+        JOIN products p
+            ON i.product_id = p.product_id
         WHERE i.product_id = ?
         """,
         (product_id,)
