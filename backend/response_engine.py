@@ -1,25 +1,53 @@
 from dataclasses import dataclass
 from typing import Any
 
-from backend.impact_engine import ImpactAssessment
+from backend.impact_engine import ImpactAssessment, Evidence
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+#
+# These are planning assumptions, not claims about real carrier
+# pricing. Keeping them centralized makes them easy to replace
+# with real logistics-cost data later.
+#
+
+EXPEDITE_COST_PER_UNIT = 25.0
+REALLOCATION_COST_PER_UNIT = 15.0
 
 
 # ============================================================
 # RESPONSE OPTION MODEL
 # ============================================================
 
+
 @dataclass(frozen=True)
 class ResponseOption:
+    """
+    A deterministic response option generated from the current
+    supply-chain state.
+
+    The response engine does not invent supply-chain facts.
+    All quantities and affected entities originate from the
+    ImpactAssessment.
+    """
+
     option_type: str
     title: str
     description: str
+
     units_recovered: int
     orders_helped: int
+
     estimated_cost: float
+
     tradeoff: str
+
     feasible: bool
     reason: str
-    evidence: tuple[Any, ...] = ()
+
+    evidence: tuple[Evidence, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,44 +62,96 @@ class ResponseOption:
             "reason": self.reason,
             "evidence": [
                 evidence.to_dict()
-                if hasattr(evidence, "to_dict")
-                else evidence
                 for evidence in self.evidence
             ],
         }
 
 
 # ============================================================
-# HELPERS
+# GENERIC HELPERS
 # ============================================================
 
-def _calculate_order_units_at_risk(
-    impact: ImpactAssessment,
-) -> int:
-    return sum(
-        order.shortage_quantity
-        for order in impact.affected_orders
-        if order.shortage_quantity > 0
+
+def _make_evidence(
+    source_type: str,
+    source_id: str,
+    description: str,
+) -> Evidence:
+    """
+    Create standardized evidence records.
+
+    Every generated response option should be traceable back
+    to either source data or a deterministic calculation.
+    """
+
+    return Evidence(
+        source_type=source_type,
+        source_id=source_id,
+        description=description,
     )
 
 
-def _count_orders_helped_by_supply(
-    affected_orders,
-    product_id: str,
-    warehouse_id: str,
-    units_available: int,
+def _order_sort_key(order) -> tuple:
+    """
+    Consistent urgency ordering.
+
+    Higher urgency score comes first.
+    Earlier promised dates come first.
+    Higher order value is used as a secondary tie-breaker.
+    """
+
+    return (
+        -order.urgency_score,
+        order.promised_date or "9999-12-31",
+        -order.order_value_at_risk,
+        order.order_id,
+    )
+
+
+def _affected_orders_with_shortage(
+    impact: ImpactAssessment,
+) -> list:
+    """
+    Return only orders that currently have an actual shortage.
+    """
+
+    return [
+        order
+        for order in impact.affected_orders
+        if order.shortage_quantity > 0
+    ]
+
+
+def _total_units_at_risk(
+    impact: ImpactAssessment,
 ) -> int:
     """
-    Determine how many affected orders at the destination can
-    actually be covered by the recovered units.
-
-    Orders are considered in urgency order.
+    Calculate total customer units currently exposed.
     """
 
-    if units_available <= 0:
+    return sum(
+        max(order.shortage_quantity, 0)
+        for order in impact.affected_orders
+    )
+
+
+def _count_orders_helped(
+    affected_orders: list,
+    product_id: str,
+    warehouse_id: str,
+    available_units: int,
+) -> int:
+    """
+    Determine how many affected orders can receive at least one
+    unit from a given supply recovery.
+
+    Orders are considered in deterministic urgency order.
+    """
+
+    if available_units <= 0:
         return 0
 
-    orders = [
+    candidate_orders = [
         order
         for order in affected_orders
         if (
@@ -81,19 +161,12 @@ def _count_orders_helped_by_supply(
         )
     ]
 
-    orders.sort(
-        key=lambda order: (
-            -order.urgency_score,
-            order.promised_date or "9999-12-31",
-            -order.order_value_at_risk,
-            order.order_id,
-        )
-    )
+    candidate_orders.sort(key=_order_sort_key)
 
-    remaining = units_available
+    remaining = available_units
     helped = 0
 
-    for order in orders:
+    for order in candidate_orders:
         if remaining <= 0:
             break
 
@@ -109,22 +182,381 @@ def _count_orders_helped_by_supply(
     return helped
 
 
-def _make_evidence(
-    source_type: str,
-    source_id: str,
-    description: str,
-):
+# ============================================================
+# EXPEDITE
+# ============================================================
+
+
+def _generate_expedite_option(
+    impact: ImpactAssessment,
+) -> ResponseOption:
     """
-    Reuse the Evidence model from impact_engine without
-    duplicating its implementation.
+    Generate an expedite option using only affected incoming
+    shipments and the orders those shipments can actually serve.
+
+    Shipment supply is mapped by product + destination warehouse.
     """
 
-    from backend.impact_engine import Evidence
+    affected_orders = _affected_orders_with_shortage(impact)
 
-    return Evidence(
-        source_type=source_type,
-        source_id=source_id,
-        description=description,
+    if not impact.affected_shipments:
+        return ResponseOption(
+            option_type="EXPEDITE",
+            title="Expedite disrupted shipments",
+            description=(
+                "Accelerate affected incoming shipments to "
+                "restore customer-facing supply."
+            ),
+            units_recovered=0,
+            orders_helped=0,
+            estimated_cost=0.0,
+            tradeoff=(
+                "No affected incoming shipment is available "
+                "for expedited recovery."
+            ),
+            feasible=False,
+            reason=(
+                "The current disruption assessment does not "
+                "contain an affected active shipment."
+            ),
+            evidence=(),
+        )
+
+    total_recoverable_units = 0
+    total_orders_helped = 0
+
+    evidence: list[Evidence] = []
+
+    for shipment in impact.affected_shipments:
+
+        if shipment.quantity <= 0:
+            continue
+
+        shipment_orders = [
+            order
+            for order in affected_orders
+            if (
+                order.product_id == shipment.product_id
+                and order.warehouse_id == shipment.warehouse_id
+            )
+        ]
+
+        if not shipment_orders:
+            continue
+
+        shipment_orders.sort(key=_order_sort_key)
+
+        remaining_supply = shipment.quantity
+        shipment_recovered = 0
+        shipment_orders_helped = 0
+
+        for order in shipment_orders:
+
+            if remaining_supply <= 0:
+                break
+
+            if order.shortage_quantity <= 0:
+                continue
+
+            covered = min(
+                remaining_supply,
+                order.shortage_quantity,
+            )
+
+            if covered <= 0:
+                continue
+
+            shipment_recovered += covered
+            shipment_orders_helped += 1
+            remaining_supply -= covered
+
+        if shipment_recovered <= 0:
+            continue
+
+        total_recoverable_units += shipment_recovered
+        total_orders_helped += shipment_orders_helped
+
+        evidence.append(
+            _make_evidence(
+                source_type="shipment",
+                source_id=shipment.shipment_id,
+                description=(
+                    f"{shipment.shipment_id} contains "
+                    f"{shipment.quantity} units of "
+                    f"{shipment.product_name} destined for "
+                    f"{shipment.warehouse_name}. "
+                    f"{shipment_recovered} units can be mapped "
+                    f"to currently affected customer demand."
+                ),
+            )
+        )
+
+    if total_recoverable_units <= 0:
+        return ResponseOption(
+            option_type="EXPEDITE",
+            title="Expedite disrupted shipments",
+            description=(
+                "Accelerate affected incoming shipments to "
+                "restore customer-facing supply."
+            ),
+            units_recovered=0,
+            orders_helped=0,
+            estimated_cost=0.0,
+            tradeoff=(
+                "Expediting cannot currently be justified because "
+                "the affected shipment quantities cannot be mapped "
+                "to a current customer shortage."
+            ),
+            feasible=False,
+            reason=(
+                "Affected shipments exist, but their supply cannot "
+                "currently be mapped to affected customer orders."
+            ),
+            evidence=tuple(evidence),
+        )
+
+    estimated_cost = (
+        total_recoverable_units
+        * EXPEDITE_COST_PER_UNIT
+    )
+
+    evidence.append(
+        _make_evidence(
+            source_type="calculation",
+            source_id="response:expedite",
+            description=(
+                f"{total_recoverable_units} units are recoverable "
+                f"through affected shipments across "
+                f"{total_orders_helped} affected orders. "
+                f"Estimated expedite cost uses the planning "
+                f"assumption of ₹{EXPEDITE_COST_PER_UNIT:.2f} "
+                f"per unit."
+            ),
+        )
+    )
+
+    return ResponseOption(
+        option_type="EXPEDITE",
+        title="Expedite disrupted shipments",
+        description=(
+            f"Accelerate affected incoming shipments to recover "
+            f"up to {total_recoverable_units} units for "
+            f"{total_orders_helped} affected orders."
+        ),
+        units_recovered=total_recoverable_units,
+        orders_helped=total_orders_helped,
+        estimated_cost=estimated_cost,
+        tradeoff=(
+            f"Estimated additional logistics cost of "
+            f"₹{estimated_cost:,.0f}, but preserves inventory "
+            f"at other warehouses and directly restores "
+            f"incoming supply."
+        ),
+        feasible=(
+            total_recoverable_units > 0
+            and total_orders_helped > 0
+        ),
+        reason=(
+            f"{total_recoverable_units} units from affected "
+            f"incoming shipments can be mapped to "
+            f"{total_orders_helped} affected customer orders."
+        ),
+        evidence=tuple(evidence),
+    )
+
+
+# ============================================================
+# PART-SHIP
+# ============================================================
+
+
+def _generate_part_ship_option(
+    impact: ImpactAssessment,
+) -> ResponseOption:
+    """
+    Identify orders that can be partially fulfilled using
+    inventory already available at their serving warehouse.
+    """
+
+    affected_orders = [
+        order
+        for order in impact.affected_orders
+        if (
+            0 < order.shortage_quantity < order.quantity
+        )
+    ]
+
+    if not affected_orders:
+        return ResponseOption(
+            option_type="PART_SHIP",
+            title="Part-ship affected orders",
+            description=(
+                "Ship currently available units now and "
+                "deliver the remaining quantity later."
+            ),
+            units_recovered=0,
+            orders_helped=0,
+            estimated_cost=0.0,
+            tradeoff=(
+                "No affected order currently has enough "
+                "available inventory for a partial shipment."
+            ),
+            feasible=False,
+            reason=(
+                "No affected customer order can currently "
+                "be partially fulfilled."
+            ),
+            evidence=(),
+        )
+
+    affected_orders.sort(key=_order_sort_key)
+
+    units_available_now = sum(
+        order.quantity - order.shortage_quantity
+        for order in affected_orders
+    )
+
+    evidence = tuple(
+        _make_evidence(
+            source_type="order",
+            source_id=order.order_id,
+            description=(
+                f"{order.order_id} for {order.customer_name} "
+                f"has {order.quantity - order.shortage_quantity} "
+                f"units currently fulfillable and "
+                f"{order.shortage_quantity} units exposed."
+            ),
+        )
+        for order in affected_orders
+    )
+
+    evidence += (
+        _make_evidence(
+            source_type="calculation",
+            source_id="response:part_ship",
+            description=(
+                f"{units_available_now} units can be shipped "
+                f"immediately across {len(affected_orders)} "
+                f"partially fulfillable orders."
+            ),
+        ),
+    )
+
+    return ResponseOption(
+        option_type="PART_SHIP",
+        title="Part-ship affected orders",
+        description=(
+            f"Ship {units_available_now} currently available "
+            f"units now while the remaining quantities are "
+            f"resolved separately."
+        ),
+        units_recovered=units_available_now,
+        orders_helped=len(affected_orders),
+        estimated_cost=0.0,
+        tradeoff=(
+            "Provides customers with available inventory sooner "
+            "without additional recovery cost, but leaves "
+            "the remaining quantities outstanding."
+        ),
+        feasible=(
+            units_available_now > 0
+            and len(affected_orders) > 0
+        ),
+        reason=(
+            f"{len(affected_orders)} affected orders have "
+            f"partial inventory available at their serving "
+            f"warehouse."
+        ),
+        evidence=evidence,
+    )
+
+
+# ============================================================
+# CUSTOMER NOTIFICATION
+# ============================================================
+
+
+def _generate_customer_notification_option(
+    impact: ImpactAssessment,
+) -> ResponseOption:
+    """
+    Generate a communication option for affected customers.
+
+    Notification does not recover inventory. Its value is in
+    reducing surprise and enabling human customer management.
+    """
+
+    affected_orders = _affected_orders_with_shortage(impact)
+
+    if not affected_orders:
+        return ResponseOption(
+            option_type="CUSTOMER_NOTIFY",
+            title="Notify affected customers",
+            description=(
+                "Communicate disruption-related fulfillment "
+                "changes to affected customers."
+            ),
+            units_recovered=0,
+            orders_helped=0,
+            estimated_cost=0.0,
+            tradeoff=(
+                "No affected customer orders require notification."
+            ),
+            feasible=False,
+            reason=(
+                "No customer order has a currently quantified "
+                "shortage."
+            ),
+            evidence=(),
+        )
+
+    evidence = tuple(
+        _make_evidence(
+            source_type="order",
+            source_id=order.order_id,
+            description=(
+                f"{order.order_id} for {order.customer_name} "
+                f"has {order.shortage_quantity} units at risk "
+                f"with promised date "
+                f"{order.promised_date or 'not specified'}."
+            ),
+        )
+        for order in affected_orders
+    )
+
+    evidence += (
+        _make_evidence(
+            source_type="calculation",
+            source_id="response:customer_notify",
+            description=(
+                f"{len(affected_orders)} affected customer "
+                f"orders require communication based on the "
+                f"current shortage assessment."
+            ),
+        ),
+    )
+
+    return ResponseOption(
+        option_type="CUSTOMER_NOTIFY",
+        title="Notify affected customers",
+        description=(
+            f"Communicate revised fulfillment expectations "
+            f"for {len(affected_orders)} affected orders."
+        ),
+        units_recovered=0,
+        orders_helped=len(affected_orders),
+        estimated_cost=0.0,
+        tradeoff=(
+            "Does not recover inventory, but gives customers "
+            "visibility and allows human teams to manage "
+            "expectations before promised dates are missed."
+        ),
+        feasible=True,
+        reason=(
+            f"{len(affected_orders)} customer orders have "
+            f"quantified exposure."
+        ),
+        evidence=evidence,
     )
 
 
@@ -132,22 +564,18 @@ def _make_evidence(
 # REALLOCATION
 # ============================================================
 
-def _find_reallocation_opportunities(
-    impact: ImpactAssessment,
-) -> list[ResponseOption]:
 
-    opportunities: list[ResponseOption] = []
+def _build_shortage_by_product_warehouse(
+    affected_orders: list,
+) -> dict[tuple[str, str], int]:
+    """
+    Calculate customer shortage by product and destination
+    warehouse.
+    """
 
-    # --------------------------------------------------------
-    # 1. Find shortages by PRODUCT + DESTINATION WAREHOUSE
-    # --------------------------------------------------------
+    shortages: dict[tuple[str, str], int] = {}
 
-    shortage_by_product_warehouse: dict[
-        tuple[str, str],
-        int,
-    ] = {}
-
-    for order in impact.affected_orders:
+    for order in affected_orders:
 
         if order.shortage_quantity <= 0:
             continue
@@ -157,30 +585,60 @@ def _find_reallocation_opportunities(
             order.warehouse_id,
         )
 
-        shortage_by_product_warehouse[key] = (
-            shortage_by_product_warehouse.get(key, 0)
+        shortages[key] = (
+            shortages.get(key, 0)
             + order.shortage_quantity
         )
 
-    if not shortage_by_product_warehouse:
-        return opportunities
+    return shortages
 
-    # --------------------------------------------------------
-    # 2. Group inventory by product
-    # --------------------------------------------------------
+
+def _build_inventory_by_product(
+    impact: ImpactAssessment,
+) -> dict[str, list]:
+    """
+    Group inventory records by product.
+    """
 
     inventory_by_product: dict[str, list] = {}
 
     for inventory in impact.inventory_impacts:
-
         inventory_by_product.setdefault(
             inventory.product_id,
             [],
         ).append(inventory)
 
-    # --------------------------------------------------------
-    # 3. Find genuine surplus warehouses
-    # --------------------------------------------------------
+    return inventory_by_product
+
+
+def _find_reallocation_opportunities(
+    impact: ImpactAssessment,
+) -> list[ResponseOption]:
+    """
+    Find genuine warehouse-to-warehouse reallocation options.
+
+    A source warehouse is considered a valid source only when it
+    has available inventory beyond its own pending demand.
+
+    A destination must have a quantified shortage.
+    """
+
+    affected_orders = _affected_orders_with_shortage(impact)
+
+    if not affected_orders:
+        return []
+
+    shortage_by_destination = (
+        _build_shortage_by_product_warehouse(
+            affected_orders
+        )
+    )
+
+    inventory_by_product = _build_inventory_by_product(
+        impact
+    )
+
+    opportunities: list[ResponseOption] = []
 
     for product_id, inventories in inventory_by_product.items():
 
@@ -189,7 +647,7 @@ def _find_reallocation_opportunities(
             for (
                 pid,
                 warehouse_id,
-            ), shortage in shortage_by_product_warehouse.items()
+            ), shortage in shortage_by_destination.items()
             if (
                 pid == product_id
                 and shortage > 0
@@ -199,59 +657,54 @@ def _find_reallocation_opportunities(
         if not destinations:
             continue
 
-        sources = []
+        sources: list[tuple[Any, int]] = []
 
         for inventory in inventories:
 
-            # A shortage warehouse cannot simultaneously be
-            # treated as a source.
             if inventory.warehouse_id in destinations:
                 continue
 
             if inventory.available_quantity <= 0:
                 continue
 
-            warehouse_demand = sum(
+            source_pending_demand = sum(
                 order.quantity
                 for order in impact.affected_orders
                 if (
                     order.product_id == product_id
-                    and order.warehouse_id == inventory.warehouse_id
+                    and order.warehouse_id
+                    == inventory.warehouse_id
                 )
             )
 
-            surplus = max(
+            source_surplus = max(
                 inventory.available_quantity
-                - warehouse_demand,
+                - source_pending_demand,
                 0,
             )
 
-            if surplus > 0:
+            if source_surplus > 0:
                 sources.append(
                     (
                         inventory,
-                        surplus,
+                        source_surplus,
                     )
                 )
 
         if not sources:
             continue
 
-        # ----------------------------------------------------
-        # 4. Allocate source surplus to affected destinations
-        # ----------------------------------------------------
-
         remaining_shortage = dict(destinations)
 
         for source, source_surplus in sources:
 
-            remaining_source_stock = source_surplus
+            remaining_source = source_surplus
 
             for destination_id in list(
                 remaining_shortage.keys()
             ):
 
-                if remaining_source_stock <= 0:
+                if remaining_source <= 0:
                     break
 
                 destination_shortage = (
@@ -262,27 +715,34 @@ def _find_reallocation_opportunities(
                     continue
 
                 units_to_move = min(
-                    remaining_source_stock,
+                    remaining_source,
                     destination_shortage,
                 )
 
                 if units_to_move <= 0:
                     continue
 
-                orders_helped = _count_orders_helped_by_supply(
-                    impact.affected_orders,
-                    product_id,
-                    destination_id,
-                    units_to_move,
+                orders_helped = _count_orders_helped(
+                    affected_orders=affected_orders,
+                    product_id=product_id,
+                    warehouse_id=destination_id,
+                    available_units=units_to_move,
                 )
 
-                estimated_cost = units_to_move * 15
+                if orders_helped <= 0:
+                    continue
+
+                estimated_cost = (
+                    units_to_move
+                    * REALLOCATION_COST_PER_UNIT
+                )
 
                 evidence = (
                     _make_evidence(
                         source_type="inventory",
                         source_id=(
-                            f"{source.warehouse_id}:{product_id}"
+                            f"{source.warehouse_id}:"
+                            f"{product_id}"
                         ),
                         description=(
                             f"{source.warehouse_name} has "
@@ -293,19 +753,35 @@ def _find_reallocation_opportunities(
                     _make_evidence(
                         source_type="calculation",
                         source_id=(
-                            f"reallocation:"
+                            f"response:reallocate:"
                             f"{source.warehouse_id}:"
                             f"{destination_id}:"
                             f"{product_id}"
                         ),
                         description=(
                             f"{source.warehouse_name} has "
-                            f"{source_surplus} units of surplus "
-                            f"{source.product_name} after accounting "
-                            f"for its pending demand. "
+                            f"{source_surplus} units of estimated "
+                            f"surplus after its pending demand. "
+                            f"Destination warehouse "
                             f"{destination_id} has "
-                            f"{destination_shortage} units of "
-                            f"shortage."
+                            f"{destination_shortage} units "
+                            f"of customer shortage."
+                        ),
+                    ),
+                    _make_evidence(
+                        source_type="calculation",
+                        source_id=(
+                            f"response:reallocate:cost:"
+                            f"{source.warehouse_id}:"
+                            f"{destination_id}:"
+                            f"{product_id}"
+                        ),
+                        description=(
+                            f"Estimated transfer cost is "
+                            f"₹{estimated_cost:,.0f}, using the "
+                            f"planning assumption of "
+                            f"₹{REALLOCATION_COST_PER_UNIT:.2f} "
+                            f"per transferred unit."
                         ),
                     ),
                 )
@@ -313,358 +789,111 @@ def _find_reallocation_opportunities(
                 opportunities.append(
                     ResponseOption(
                         option_type="REALLOCATE",
-
                         title=(
                             f"Reallocate "
                             f"{units_to_move} units of "
                             f"{source.product_name}"
                         ),
-
                         description=(
-                            f"Move {units_to_move} units of "
+                            f"Transfer {units_to_move} units of "
                             f"{source.product_name} from "
-                            f"{source.warehouse_name} to "
-                            f"the warehouse serving affected "
-                            f"customer orders."
+                            f"{source.warehouse_name} to the "
+                            f"warehouse serving affected orders."
                         ),
-
                         units_recovered=units_to_move,
-
                         orders_helped=orders_helped,
-
                         estimated_cost=estimated_cost,
-
                         tradeoff=(
-                            f"Uses existing surplus inventory at "
-                            f"{source.warehouse_name}, avoiding "
-                            f"dependence on the disrupted shipment. "
-                            f"Trade-off: ₹{estimated_cost:,.0f} "
-                            f"transfer cost and a smaller inventory "
-                            f"buffer at the source warehouse."
+                            f"Uses existing inventory instead of "
+                            f"waiting for disrupted supply. "
+                            f"Estimated transfer cost is "
+                            f"₹{estimated_cost:,.0f} and reduces "
+                            f"the source warehouse's inventory buffer."
                         ),
-
                         feasible=True,
-
                         reason=(
                             f"{source.warehouse_name} has "
-                            f"{source.available_quantity} available "
-                            f"units, with approximately "
-                            f"{source_surplus} units of surplus "
-                            f"after its pending demand. "
+                            f"{source_surplus} units of estimated "
+                            f"surplus while destination "
                             f"{destination_id} has "
                             f"{destination_shortage} units "
-                            f"of demand at risk."
+                            f"of customer shortage."
                         ),
-
                         evidence=evidence,
                     )
                 )
 
-                remaining_source_stock -= units_to_move
+                remaining_source -= units_to_move
                 remaining_shortage[destination_id] -= units_to_move
 
     return opportunities
 
 
 # ============================================================
-# MAIN RESPONSE ENGINE
+# RESPONSE OPTION GENERATION
 # ============================================================
+
 
 def generate_response_options(
     impact: ImpactAssessment,
 ) -> list[ResponseOption]:
+    """
+    Generate all response options supported by the current
+    deterministic impact assessment.
 
-    # No business impact = no response actions.
+    Important design rule:
+
+        This function never parses the original disruption notice.
+
+        It never guesses suppliers, products, orders, inventory,
+        quantities, or warehouses.
+
+        It only operates on resolved and quantified business
+        impact supplied by ImpactAssessment.
+    """
+
+    # A disruption with no business impact must produce no
+    # response actions.
     if not impact.has_impact:
         return []
 
-    affected_orders = list(
-        impact.affected_orders
-    )
-
-    total_units_at_risk = (
-        _calculate_order_units_at_risk(impact)
-    )
-
     options: list[ResponseOption] = []
 
-    # ========================================================
-    # OPTION 1 — EXPEDITE
-    # ========================================================
-
-    expedited_shipments = [
-        shipment
-        for shipment in impact.affected_shipments
-        if shipment.quantity > 0
-    ]
-
-    expedite_units = sum(
-        shipment.quantity
-        for shipment in expedited_shipments
-    )
-
-    expedite_units_recovered = min(
-        expedite_units,
-        total_units_at_risk,
-    )
-
     # --------------------------------------------------------
-    # Determine which orders the recovered supply can cover.
-    #
-    # Shipment supply is mapped to the product + destination
-    # warehouse instead of blindly claiming that every affected
-    # order benefits.
+    # 1. Expedite affected incoming supply
     # --------------------------------------------------------
 
-    remaining_recovery = expedite_units_recovered
-    orders_helped_by_expedite = 0
-
-    for shipment in expedited_shipments:
-
-        if remaining_recovery <= 0:
-            break
-
-        shipment_orders = [
-            order
-            for order in affected_orders
-            if (
-                order.product_id == shipment.product_id
-                and order.warehouse_id == shipment.warehouse_id
-                and order.shortage_quantity > 0
-            )
-        ]
-
-        shipment_orders.sort(
-            key=lambda order: (
-                -order.urgency_score,
-                order.promised_date or "9999-12-31",
-                -order.order_value_at_risk,
-                order.order_id,
-            )
-        )
-
-        shipment_recovery = min(
-            shipment.quantity,
-            remaining_recovery,
-        )
-
-        for order in shipment_orders:
-
-            if shipment_recovery <= 0:
-                break
-
-            covered = min(
-                shipment_recovery,
-                order.shortage_quantity,
-            )
-
-            if covered > 0:
-                orders_helped_by_expedite += 1
-                shipment_recovery -= covered
-                remaining_recovery -= covered
-
-    # Demo assumption:
-    # ₹25 per expedited unit.
-    expedite_cost = (
-        expedite_units_recovered * 25
+    expedite_option = _generate_expedite_option(
+        impact
     )
 
-    expedite_evidence = tuple(
-        _make_evidence(
-            source_type="shipment",
-            source_id=shipment.shipment_id,
-            description=(
-                f"{shipment.shipment_id} contains "
-                f"{shipment.quantity} units of "
-                f"{shipment.product_name} destined for "
-                f"{shipment.warehouse_name}."
-            ),
-        )
-        for shipment in expedited_shipments
+    options.append(expedite_option)
+
+    # --------------------------------------------------------
+    # 2. Part-ship orders using available inventory
+    # --------------------------------------------------------
+
+    part_ship_option = _generate_part_ship_option(
+        impact
     )
 
-    options.append(
-        ResponseOption(
-            option_type="EXPEDITE",
+    options.append(part_ship_option)
 
-            title="Expedite disrupted shipment",
+    # --------------------------------------------------------
+    # 3. Communicate with affected customers
+    # --------------------------------------------------------
 
-            description=(
-                "Pay for expedited transport or supplier "
-                "recovery to restore disrupted incoming supply."
-            ),
-
-            units_recovered=(
-                expedite_units_recovered
-            ),
-
-            orders_helped=(
-                orders_helped_by_expedite
-            ),
-
-            estimated_cost=(
-                expedite_cost
-            ),
-
-            tradeoff=(
-                "Higher logistics cost, but preserves "
-                "customer orders without consuming "
-                "inventory from another warehouse."
-            ),
-
-            feasible=(
-                expedite_units_recovered > 0
-                and orders_helped_by_expedite > 0
-            ),
-
-            reason=(
-                "Affected incoming shipment quantity is "
-                "available for expedited recovery and can "
-                "be mapped to affected orders."
-            ),
-
-            evidence=expedite_evidence,
+    notification_option = (
+        _generate_customer_notification_option(
+            impact
         )
     )
 
-    # ========================================================
-    # OPTION 2 — PART SHIP
-    # ========================================================
+    options.append(notification_option)
 
-    part_ship_units = sum(
-        order.quantity - order.shortage_quantity
-        for order in affected_orders
-        if (
-            order.quantity
-            > order.shortage_quantity
-        )
-    )
-
-    part_ship_orders = sum(
-        1
-        for order in affected_orders
-        if (
-            0 < order.shortage_quantity
-            < order.quantity
-        )
-    )
-
-    part_ship_evidence = tuple(
-        _make_evidence(
-            source_type="order",
-            source_id=order.order_id,
-            description=(
-                f"{order.order_id} can receive "
-                f"{order.quantity - order.shortage_quantity} "
-                f"units immediately, with "
-                f"{order.shortage_quantity} units exposed."
-            ),
-        )
-        for order in affected_orders
-        if (
-            0 < order.shortage_quantity
-            < order.quantity
-        )
-    )
-
-    options.append(
-        ResponseOption(
-            option_type="PART_SHIP",
-
-            title="Part-ship affected orders",
-
-            description=(
-                "Ship available units now and deliver "
-                "the remaining quantity later."
-            ),
-
-            units_recovered=(
-                part_ship_units
-            ),
-
-            orders_helped=(
-                part_ship_orders
-            ),
-
-            estimated_cost=0.0,
-
-            tradeoff=(
-                "Customers receive partial fulfillment "
-                "sooner, but remaining units still "
-                "require follow-up."
-            ),
-
-            feasible=(
-                part_ship_orders > 0
-            ),
-
-            reason=(
-                "At least one affected order can be "
-                "partially fulfilled using currently "
-                "available inventory."
-            ),
-
-            evidence=part_ship_evidence,
-        )
-    )
-
-    # ========================================================
-    # OPTION 3 — CUSTOMER NOTIFICATION
-    # ========================================================
-
-    notification_evidence = tuple(
-        _make_evidence(
-            source_type="order",
-            source_id=order.order_id,
-            description=(
-                f"{order.order_id} for {order.customer_name} "
-                f"is currently affected by the disruption."
-            ),
-        )
-        for order in affected_orders
-    )
-
-    options.append(
-        ResponseOption(
-            option_type="CUSTOMER_NOTIFY",
-
-            title="Notify affected customers",
-
-            description=(
-                "Communicate expected delays and "
-                "revised fulfillment expectations."
-            ),
-
-            units_recovered=0,
-
-            orders_helped=len(
-                affected_orders
-            ),
-
-            estimated_cost=0.0,
-
-            tradeoff=(
-                "Does not recover inventory, but reduces "
-                "surprise and gives customers time "
-                "to adjust."
-            ),
-
-            feasible=(
-                len(affected_orders) > 0
-            ),
-
-            reason=(
-                "Affected customer orders "
-                "have been identified."
-            ),
-
-            evidence=notification_evidence,
-        )
-    )
-
-    # ========================================================
-    # OPTION 4 — REALLOCATION
-    # ========================================================
+    # --------------------------------------------------------
+    # 4. Reallocate genuine surplus inventory
+    # --------------------------------------------------------
 
     options.extend(
         _find_reallocation_opportunities(
@@ -673,153 +902,3 @@ def generate_response_options(
     )
 
     return options
-
-
-# ============================================================
-# CLI OUTPUT
-# ============================================================
-
-def print_response_options(
-    options: list[ResponseOption],
-) -> None:
-
-    print()
-    print("=" * 60)
-    print("RippleX Response Options")
-    print("=" * 60)
-
-    if not options:
-        print("No response options available.")
-        return
-
-    for index, option in enumerate(
-        options,
-        start=1,
-    ):
-
-        print()
-        print(
-            f"{index}. {option.title}"
-        )
-
-        print(
-            f"   Type: "
-            f"{option.option_type}"
-        )
-
-        print(
-            f"   Units recovered: "
-            f"{option.units_recovered}"
-        )
-
-        print(
-            f"   Orders helped: "
-            f"{option.orders_helped}"
-        )
-
-        print(
-            f"   Estimated cost: "
-            f"₹{option.estimated_cost:,.2f}"
-        )
-
-        print(
-            f"   Feasible: "
-            f"{option.feasible}"
-        )
-
-        print(
-            f"   Trade-off: "
-            f"{option.tradeoff}"
-        )
-
-        print(
-            f"   Reason: "
-            f"{option.reason}"
-        )
-
-
-# ============================================================
-# DETERMINISTIC TEST
-# ============================================================
-
-if __name__ == "__main__":
-
-    from types import SimpleNamespace
-
-    # This test does NOT call Gemini.
-
-    impact = SimpleNamespace(
-
-        has_impact=True,
-
-        affected_shipments=[
-            SimpleNamespace(
-                shipment_id="SH001",
-                quantity=120,
-                product_id="P001",
-                product_name="X-200",
-                warehouse_id="WH001",
-                warehouse_name="Bangalore Central",
-            )
-        ],
-
-        affected_orders=[
-
-            SimpleNamespace(
-                order_id="ORD101",
-                customer_name="Reliance Retail",
-                product_id="P001",
-                product_name="X-200",
-                quantity=40,
-                warehouse_id="WH001",
-                warehouse_name="Bangalore Central",
-                shortage_quantity=40,
-                urgency_score=90,
-                promised_date="2026-09-08",
-                order_value_at_risk=34000,
-            ),
-
-            SimpleNamespace(
-                order_id="ORD102",
-                customer_name="TechWorld Distribution",
-                product_id="P001",
-                product_name="X-200",
-                quantity=30,
-                warehouse_id="WH001",
-                warehouse_name="Bangalore Central",
-                shortage_quantity=30,
-                urgency_score=85,
-                promised_date="2026-09-10",
-                order_value_at_risk=25500,
-            ),
-
-        ],
-
-        inventory_impacts=[
-
-            SimpleNamespace(
-                product_id="P001",
-                product_name="X-200",
-                warehouse_id="WH001",
-                warehouse_name="Bangalore Central",
-                available_quantity=25,
-            ),
-
-            SimpleNamespace(
-                product_id="P001",
-                product_name="X-200",
-                warehouse_id="WH002",
-                warehouse_name="Chennai Distribution",
-                available_quantity=110,
-            ),
-
-        ],
-    )
-
-    options = generate_response_options(
-        impact
-    )
-
-    print_response_options(
-        options
-    )
