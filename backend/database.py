@@ -123,7 +123,7 @@ def get_inventory(product_id):
     )
 
 
-def get_shipments(supplier_id=None, product_id=None):
+def get_shipments(supplier_id=None, product_id=None, shipment_id=None):
     """
     Get shipments, optionally filtered by supplier or product.
     """
@@ -160,9 +160,19 @@ def get_shipments(supplier_id=None, product_id=None):
         sql += " AND s.product_id = ?"
         params.append(product_id)
 
+    if shipment_id:
+        sql += " AND s.shipment_id = ?"
+        params.append(shipment_id)
+
     sql += " ORDER BY s.expected_date"
 
     return query_db(sql, tuple(params))
+
+
+def get_shipment(shipment_id):
+    """Get one shipment by its exact database identifier."""
+    rows = get_shipments(shipment_id=shipment_id)
+    return rows[0] if rows else None
 
 
 def get_orders(product_id=None, warehouse_id=None):

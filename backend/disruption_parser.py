@@ -50,6 +50,14 @@ class DisruptionEvent(BaseModel):
         ),
     )
 
+    carrier_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Carrier company explicitly mentioned in the notice. "
+            "This is informational metadata and is not a database entity."
+        ),
+    )
+
     location: Optional[str] = Field(
         default=None,
         description=(
@@ -173,6 +181,10 @@ IMPORTANT ENTITY RULES:
        parts
 
    Do NOT invent or transform the actual product identifier.
+
+2A. CARRIERS
+   Extract a carrier company name only when it is explicitly stated.
+   carrier_name is informational metadata. Do not map it to a supplier.
 
 3. SHIPMENTS
    Shipment identifiers look like:

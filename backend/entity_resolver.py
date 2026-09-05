@@ -4,7 +4,10 @@ from dataclasses import asdict, dataclass
 from typing import Optional
 
 from backend.database import (
+    get_product,
     get_product_by_name,
+    get_shipment,
+    get_supplier,
     get_supplier_by_name,
 )
 from backend.disruption_parser import DisruptionEvent
@@ -65,6 +68,8 @@ class ResolvedDisruption:
     supplier: Optional[EntityMatch]
     products: tuple[ResolvedProduct, ...]
 
+    affected_shipment_ids: tuple[str, ...]
+
     unresolved_entities: tuple[EntityMatch, ...]
 
     requires_human_review: bool
@@ -81,6 +86,9 @@ class ResolvedDisruption:
                 product.to_dict()
                 for product in self.products
             ],
+            "affected_shipment_ids": list(
+                self.affected_shipment_ids
+            ),
             "unresolved_entities": [
                 entity.to_dict()
                 for entity in self.unresolved_entities
@@ -350,9 +358,50 @@ def resolve_disruption(
     # Resolve supplier
     # --------------------------------------------------------
 
-    supplier_match = resolve_supplier(
-        disruption.supplier_name
-    )
+    resolved_shipments = []
+    shipment_entities: list[EntityMatch] = []
+
+    for shipment_id in disruption.affected_shipments:
+        shipment = get_shipment(shipment_id)
+
+        if shipment is None:
+            shipment_entities.append(
+                EntityMatch(
+                    input_value=shipment_id,
+                    entity_type="shipment",
+                    entity_id=None,
+                    entity_name=None,
+                    status="unresolved",
+                    confidence=0.0,
+                    reason="No shipment with this exact ID exists in the database.",
+                )
+            )
+            continue
+
+        resolved_shipments.append(shipment)
+
+    # A carrier notice can identify a shipment without naming the supplier.
+    # In that case supplier/product/warehouse are derived only from the exact
+    # shipment record, never guessed from the carrier name.
+    if disruption.supplier_name:
+        supplier_match = resolve_supplier(disruption.supplier_name)
+    elif resolved_shipments:
+        supplier_ids = {shipment["supplier_id"] for shipment in resolved_shipments}
+        if len(supplier_ids) == 1:
+            supplier = get_supplier(next(iter(supplier_ids)))
+            supplier_match = EntityMatch(
+                input_value=", ".join(shipment["shipment_id"] for shipment in resolved_shipments),
+                entity_type="supplier",
+                entity_id=supplier["supplier_id"],
+                entity_name=supplier["name"],
+                status="resolved",
+                confidence=1.0,
+                reason="Derived from the exact resolved shipment record.",
+            )
+        else:
+            supplier_match = resolve_supplier(None)
+    else:
+        supplier_match = resolve_supplier(None)
 
     # --------------------------------------------------------
     # Resolve products
@@ -369,6 +418,50 @@ def resolve_disruption(
         supplier_id=supplier_id,
     )
 
+    # Shipment IDs establish affected products even if the carrier notice did
+    # not repeat the product name. Explicit products still go through the
+    # usual exact resolver above.
+    resolved_product_ids = {product.product_id for product in products}
+    derived_products: list[ResolvedProduct] = list(products)
+
+    for shipment in resolved_shipments:
+        product = get_product(shipment["product_id"])
+        if product is None:
+            continue
+
+        if product["product_id"] not in resolved_product_ids:
+            derived_products.append(
+                ResolvedProduct(
+                    product_id=product["product_id"],
+                    product_name=product["name"],
+                )
+            )
+            resolved_product_ids.add(product["product_id"])
+
+    # An explicit product and an explicit shipment must agree. Do not widen a
+    # carrier disruption to unrelated products.
+    mentioned_product_ids = {
+        product.product_id for product in products
+    }
+    shipment_product_ids = {
+        shipment["product_id"] for shipment in resolved_shipments
+    }
+
+    if mentioned_product_ids and shipment_product_ids and not (
+        mentioned_product_ids & shipment_product_ids
+    ):
+        unresolved_products += (
+            EntityMatch(
+                input_value=", ".join(disruption.affected_products),
+                entity_type="product",
+                entity_id=None,
+                entity_name=None,
+                status="conflict",
+                confidence=0.0,
+                reason="Explicit product does not match the resolved shipment product.",
+            ),
+        )
+
     # --------------------------------------------------------
     # Collect unresolved entities
     # --------------------------------------------------------
@@ -379,6 +472,7 @@ def resolve_disruption(
         unresolved_entities.append(supplier_match)
 
     unresolved_entities.extend(unresolved_products)
+    unresolved_entities.extend(shipment_entities)
 
     # --------------------------------------------------------
     # Determine whether human review is required
@@ -390,10 +484,14 @@ def resolve_disruption(
         event_type=disruption.event_type,
         supplier=(
             supplier_match
-            if disruption.supplier_name
+            if disruption.supplier_name or resolved_shipments
             else None
         ),
-        products=products,
+        products=tuple(derived_products),
+        affected_shipment_ids=tuple(
+            shipment["shipment_id"]
+            for shipment in resolved_shipments
+        ),
         unresolved_entities=tuple(unresolved_entities),
         requires_human_review=requires_human_review,
     )

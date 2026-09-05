@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.impact_engine import ImpactAssessment, Evidence
+from backend.database import get_orders
 
 
 # ============================================================
@@ -667,15 +668,23 @@ def _find_reallocation_opportunities(
             if inventory.available_quantity <= 0:
                 continue
 
+            # Source demand must include every pending order at the source,
+            # not just orders already at risk. Otherwise protected source
+            # orders could be incorrectly treated as transferable surplus.
             source_pending_demand = sum(
-                order.quantity
-                for order in impact.affected_orders
-                if (
-                    order.product_id == product_id
-                    and order.warehouse_id
-                    == inventory.warehouse_id
+                int(order["quantity"] or 0)
+                for order in get_orders(
+                    product_id=product_id,
+                    warehouse_id=inventory.warehouse_id,
                 )
             )
+
+            # Keep stock at a warehouse that still has pending demand for
+            # this exact product. A nominal arithmetic remainder is not a
+            # safe transfer commitment while local customer orders remain
+            # open; it must not be offered as a reallocation source.
+            if source_pending_demand > 0:
+                continue
 
             source_surplus = max(
                 inventory.available_quantity

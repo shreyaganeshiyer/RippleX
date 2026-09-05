@@ -266,6 +266,10 @@ def _find_affected_shipments(
     if not product_ids:
         return []
 
+    explicit_shipment_ids = set(
+        disruption.affected_shipment_ids
+    )
+
     shipments = get_shipments(supplier_id=supplier_id)
 
     affected: list[AffectedShipment] = []
@@ -273,7 +277,11 @@ def _find_affected_shipments(
     for shipment_row in shipments:
         shipment = _row_to_dict(shipment_row)
 
+        shipment_id = str(shipment.get("shipment_id") or "")
         product_id = shipment.get("product_id")
+
+        if explicit_shipment_ids and shipment_id not in explicit_shipment_ids:
+            continue
 
         if product_id not in product_ids:
             continue
@@ -284,7 +292,6 @@ def _find_affected_shipments(
         if status in {"DELIVERED", "COMPLETED", "CANCELLED"}:
             continue
 
-        shipment_id = str(shipment.get("shipment_id") or "")
         supplier_name = str(
             shipment.get("supplier_name")
             or disruption.supplier.entity_name
