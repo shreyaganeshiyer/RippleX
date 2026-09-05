@@ -70,6 +70,7 @@ class ResolvedDisruption:
     supplier: Optional[EntityMatch]
     products: tuple[ResolvedProduct, ...]
     warehouse: Optional[EntityMatch]
+    delay_days: Optional[int]
     affected_shipment_ids: tuple[str, ...]
     unresolved_entities: tuple[EntityMatch, ...]
     requires_human_review: bool
@@ -544,6 +545,7 @@ def resolve_disruption(
             if disruption.supplier_name or resolved_shipments
             else None
         ),
+        delay_days=disruption.delay_days,
         products=tuple(derived_products),
         warehouse=warehouse_match,
         affected_shipment_ids=tuple(
