@@ -6,9 +6,11 @@ from typing import Optional
 from backend.database import (
     get_product,
     get_product_by_name,
-    get_shipment,
+    get_shipments,
     get_supplier,
     get_supplier_by_name,
+    get_warehouse,
+    get_all_warehouses,
 )
 from backend.disruption_parser import DisruptionEvent
 
@@ -67,11 +69,9 @@ class ResolvedDisruption:
     event_type: str
     supplier: Optional[EntityMatch]
     products: tuple[ResolvedProduct, ...]
-
+    warehouse: Optional[EntityMatch]
     affected_shipment_ids: tuple[str, ...]
-
     unresolved_entities: tuple[EntityMatch, ...]
-
     requires_human_review: bool
 
     def to_dict(self) -> dict:
@@ -86,6 +86,11 @@ class ResolvedDisruption:
                 product.to_dict()
                 for product in self.products
             ],
+            "warehouse": (
+                self.warehouse.to_dict()
+                if self.warehouse
+                else None
+            ),
             "affected_shipment_ids": list(
                 self.affected_shipment_ids
             ),
@@ -95,11 +100,6 @@ class ResolvedDisruption:
             ],
             "requires_human_review": self.requires_human_review,
         }
-
-
-# ============================================================
-# Normalization
-# ============================================================
 
 def normalize_name(value: Optional[str]) -> str:
     """
@@ -334,6 +334,47 @@ def resolve_products(
         tuple(unresolved),
     )
 
+def resolve_warehouse(
+    warehouse_name: str,
+) -> EntityMatch:
+    if not warehouse_name or not warehouse_name.strip():
+        return EntityMatch(
+            input_value=warehouse_name or "",
+            entity_type="warehouse",
+            entity_id=None,
+            entity_name=None,
+            status="missing",
+            confidence=0.0,
+            reason="Warehouse name was not provided.",
+        )
+
+    normalized_input = normalize_name(warehouse_name)
+
+    for warehouse in get_all_warehouses():
+        if normalize_name(warehouse["name"]) == normalized_input:
+            return EntityMatch(
+                input_value=warehouse_name,
+                entity_type="warehouse",
+                entity_id=warehouse["warehouse_id"],
+                entity_name=warehouse["name"],
+                status="resolved",
+                confidence=1.0,
+                reason="Exact warehouse name matched a database record.",
+            )
+
+    return EntityMatch(
+        input_value=warehouse_name,
+        entity_type="warehouse",
+        entity_id=None,
+        entity_name=None,
+        status="unresolved",
+        confidence=0.0,
+        reason=(
+            f"No warehouse with normalized name "
+            f"'{normalized_input}' exists in the database."
+        ),
+    )
+
 
 # ============================================================
 # Complete disruption resolution
@@ -362,7 +403,7 @@ def resolve_disruption(
     shipment_entities: list[EntityMatch] = []
 
     for shipment_id in disruption.affected_shipments:
-        shipment = get_shipment(shipment_id)
+        shipment = get_shipments(shipment_id)
 
         if shipment is None:
             shipment_entities.append(
@@ -389,15 +430,18 @@ def resolve_disruption(
         supplier_ids = {shipment["supplier_id"] for shipment in resolved_shipments}
         if len(supplier_ids) == 1:
             supplier = get_supplier(next(iter(supplier_ids)))
-            supplier_match = EntityMatch(
-                input_value=", ".join(shipment["shipment_id"] for shipment in resolved_shipments),
-                entity_type="supplier",
-                entity_id=supplier["supplier_id"],
-                entity_name=supplier["name"],
-                status="resolved",
-                confidence=1.0,
-                reason="Derived from the exact resolved shipment record.",
-            )
+            if supplier is not None:
+                supplier_match = EntityMatch(
+                    input_value=", ".join(shipment["shipment_id"] for shipment in resolved_shipments),
+                    entity_type="supplier",
+                    entity_id=supplier["supplier_id"],
+                    entity_name=supplier["name"],
+                    status="resolved",
+                    confidence=1.0,
+                    reason="Derived from the exact resolved shipment record.",
+                )
+            else:
+                supplier_match = resolve_supplier(None)
         else:
             supplier_match = resolve_supplier(None)
     else:
@@ -461,6 +505,16 @@ def resolve_disruption(
                 reason="Explicit product does not match the resolved shipment product.",
             ),
         )
+    # --------------------------------------------------------
+    # Resolve warehouse
+    # --------------------------------------------------------
+
+    if disruption.warehouse_name:
+        warehouse_match = resolve_warehouse(
+            disruption.warehouse_name
+        )
+    else:
+        warehouse_match = None
 
     # --------------------------------------------------------
     # Collect unresolved entities
@@ -468,8 +522,11 @@ def resolve_disruption(
 
     unresolved_entities: list[EntityMatch] = []
 
-    if not supplier_match.resolved:
+    if supplier_match.status == "unresolved":
         unresolved_entities.append(supplier_match)
+
+    if warehouse_match and not warehouse_match.resolved:
+        unresolved_entities.append(warehouse_match)
 
     unresolved_entities.extend(unresolved_products)
     unresolved_entities.extend(shipment_entities)
@@ -488,6 +545,7 @@ def resolve_disruption(
             else None
         ),
         products=tuple(derived_products),
+        warehouse=warehouse_match,
         affected_shipment_ids=tuple(
             shipment["shipment_id"]
             for shipment in resolved_shipments
@@ -565,65 +623,3 @@ def print_resolution(result: ResolvedDisruption) -> None:
         "YES" if result.requires_human_review else "NO",
     )
 
-
-# ============================================================
-# Tests
-# ============================================================
-
-if __name__ == "__main__":
-
-    # Import here so the module itself remains clean when
-    # imported by other parts of the application.
-    from backend.disruption_parser import parse_disruption
-
-    # --------------------------------------------------------
-    # TEST 1 — Normal disruption
-    # --------------------------------------------------------
-
-    print("\n\nTEST 1 — Valid disruption")
-
-    notice = """
-    Due to an unexpected production issue at our Bangalore
-    facility, ABC Components will not be able to dispatch
-    X-200 and X-300 for approximately 10 days.
-    """
-
-    disruption = parse_disruption(notice)
-
-    result = resolve_disruption(disruption)
-
-    print_resolution(result)
-
-    # --------------------------------------------------------
-    # TEST 2 — Unknown supplier
-    # --------------------------------------------------------
-
-    print("\n\nTEST 2 — Unknown supplier")
-
-    notice = """
-    NovaTech Industries has stopped production of the Q-999
-    for the next 15 days.
-    """
-
-    disruption = parse_disruption(notice)
-
-    result = resolve_disruption(disruption)
-
-    print_resolution(result)
-
-    # --------------------------------------------------------
-    # TEST 3 — Ambiguous / insufficient information
-    # --------------------------------------------------------
-
-    print("\n\nTEST 3 — Ambiguous disruption")
-
-    notice = """
-    We're experiencing delays with the X-series.
-    Please expect some disruption to upcoming shipments.
-    """
-
-    disruption = parse_disruption(notice)
-
-    result = resolve_disruption(disruption)
-
-    print_resolution(result)

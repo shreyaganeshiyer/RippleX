@@ -20,7 +20,7 @@ def run_test(name, event):
     "  Affected shipment IDs:",
     event.affected_shipments
     )   
-
+    print("  Warehouse:", resolved.warehouse.entity_name if resolved.warehouse else None)
     print("  Human review:", resolved.requires_human_review)
 
     impact = assess_impact(resolved)

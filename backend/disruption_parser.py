@@ -65,6 +65,15 @@ class DisruptionEvent(BaseModel):
         ),
     )
 
+    warehouse_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Warehouse name explicitly mentioned in the notice. "
+            "Extract it only when the notice clearly identifies "
+            "a warehouse or distribution center."
+        ),
+    )
+
     affected_products: list[str] = Field(
         default_factory=list,
         description=(
@@ -205,11 +214,25 @@ IMPORTANT ENTITY RULES:
    affected_shipments.
 
 5. WAREHOUSES
-   Warehouse identifiers look like:
-       WH001
-       WH002
+   If the notice explicitly identifies a warehouse, distribution
+   center, fulfillment center, or warehouse facility, extract its
+   name into warehouse_name.
 
-   Do not put warehouse IDs in affected_products.
+   Examples:
+
+       "Chennai Distribution warehouse"
+       → warehouse_name = "Chennai Distribution"
+
+       "Mumbai Distribution"
+       → warehouse_name = "Mumbai Distribution"
+
+   If a warehouse ID such as WH002 is explicitly mentioned,
+   do not put it in affected_products or affected_shipments.
+
+   Do not invent or infer a warehouse name from a city alone.
+
+   A location such as "Chennai" should remain in location unless
+   the notice explicitly identifies a warehouse there.
 
 6. SUPPLIER IDS
    Identifiers such as SUP001 are supplier IDs, not products.
