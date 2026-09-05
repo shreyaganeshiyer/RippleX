@@ -334,6 +334,93 @@ def _find_affected_shipments(
 
     return affected
 
+def _find_warehouse_shipments(
+    disruption: ResolvedDisruption,
+) -> list[AffectedShipment]:
+    """
+    Find active incoming shipments destined for the disrupted warehouse.
+    """
+
+    if disruption.warehouse is None or not disruption.warehouse.resolved:
+        return []
+
+    warehouse_id = disruption.warehouse.entity_id
+
+    if not warehouse_id:
+        return []
+
+    shipments = get_shipments()
+
+    affected: list[AffectedShipment] = []
+
+    for shipment_row in shipments:
+        shipment = _row_to_dict(shipment_row)
+
+        if str(shipment.get("warehouse_id") or "") != warehouse_id:
+            continue
+
+        status = str(
+            shipment.get("status") or ""
+        ).upper()
+
+        if status in {"DELIVERED", "COMPLETED", "CANCELLED"}:
+            continue
+
+        shipment_id = str(
+            shipment.get("shipment_id") or ""
+        )
+
+        quantity = _safe_int(
+            shipment.get("quantity")
+        )
+
+        supplier_name = str(
+            shipment.get("supplier_name") or ""
+        )
+
+        product_name = str(
+            shipment.get("product_name") or ""
+        )
+
+        warehouse_name = str(
+            shipment.get("warehouse_name") or ""
+        )
+
+        evidence = (
+            _make_evidence(
+                source_type="shipment",
+                source_id=shipment_id,
+                description=(
+                    f"Shipment {shipment_id} contains {quantity} units "
+                    f"of {product_name} destined for "
+                    f"{warehouse_name} and is currently not completed."
+                ),
+            ),
+        )
+
+        affected.append(
+            AffectedShipment(
+                shipment_id=shipment_id,
+                supplier_id=str(
+                    shipment.get("supplier_id") or ""
+                ),
+                supplier_name=supplier_name,
+                product_id=str(
+                    shipment.get("product_id") or ""
+                ),
+                product_name=product_name,
+                quantity=quantity,
+                warehouse_id=warehouse_id,
+                warehouse_name=warehouse_name,
+                expected_date=str(
+                    shipment.get("expected_date") or ""
+                ),
+                status=status,
+                evidence=evidence,
+            )
+        )
+
+    return affected
 
 # ---------------------------------------------------------------------------
 # Inventory tracing
@@ -408,6 +495,74 @@ def _find_inventory_impacts(
     return impacts
 
 
+def _find_warehouse_inventory_impacts(
+    warehouse_id: str,
+) -> list[InventoryImpact]:
+    """
+    Retrieve current inventory held at the disrupted warehouse.
+    """
+
+    impacts: list[InventoryImpact] = []
+
+    # The database API is product-based, so inspect products represented
+    # in the warehouse through the inventory records.
+    from backend.database import get_all_products
+
+    for product in get_all_products():
+        product_id = str(product["product_id"])
+
+        for inventory_row in get_inventory(product_id):
+            inventory = _row_to_dict(inventory_row)
+
+            if str(inventory.get("warehouse_id") or "") != warehouse_id:
+                continue
+
+            warehouse_name = str(
+                inventory.get("warehouse_name") or ""
+            )
+            product_name = str(
+                inventory.get("product_name") or ""
+            )
+
+            quantity_on_hand = _safe_int(
+                inventory.get("quantity")
+            )
+
+            reserved_quantity = _safe_int(
+                inventory.get("reserved_quantity")
+            )
+
+            available_quantity = _safe_int(
+                inventory.get("available_quantity")
+            )
+
+            evidence = (
+                _make_evidence(
+                    source_type="inventory",
+                    source_id=f"{warehouse_id}:{product_id}",
+                    description=(
+                        f"{warehouse_name} has {quantity_on_hand} units "
+                        f"of {product_name} on hand, {reserved_quantity} "
+                        f"reserved, leaving {available_quantity} available."
+                    ),
+                ),
+            )
+
+            impacts.append(
+                InventoryImpact(
+                    product_id=product_id,
+                    product_name=product_name,
+                    warehouse_id=warehouse_id,
+                    warehouse_name=warehouse_name,
+                    quantity_on_hand=quantity_on_hand,
+                    reserved_quantity=reserved_quantity,
+                    available_quantity=available_quantity,
+                    evidence=evidence,
+                )
+            )
+
+    return impacts
+
 # ---------------------------------------------------------------------------
 # Order tracing
 # ---------------------------------------------------------------------------
@@ -438,6 +593,37 @@ def _find_affected_orders(
 
     return orders
 
+
+def _find_warehouse_orders(
+    warehouse_id: str,
+) -> list[dict[str, Any]]:
+    """
+    Retrieve pending customer orders assigned to the disrupted warehouse.
+    """
+
+    orders: list[dict[str, Any]] = []
+
+    from backend.database import get_all_products
+
+    for product in get_all_products():
+        product_id = str(product["product_id"])
+
+        for order_row in get_orders(product_id=product_id):
+            order = _row_to_dict(order_row)
+
+            if str(order.get("warehouse_id") or "") != warehouse_id:
+                continue
+
+            status = str(
+                order.get("status") or ""
+            ).upper()
+
+            if status != "PENDING":
+                continue
+
+            orders.append(order)
+
+    return orders
 
 # ---------------------------------------------------------------------------
 # Impact calculation
@@ -1066,7 +1252,15 @@ def assess_impact(
             ),
         )
 
-    if disruption.supplier is None or not disruption.supplier.resolved:
+    is_warehouse_disruption = (
+    disruption.warehouse is not None
+    and disruption.warehouse.resolved
+        )
+
+    if not is_warehouse_disruption and (
+            disruption.supplier is None
+            or not disruption.supplier.resolved
+        ):
         return ImpactAssessment(
             has_impact=False,
             summary=(
@@ -1098,47 +1292,87 @@ def assess_impact(
         if product.product_id
     }
 
-    if not product_ids:
-        return ImpactAssessment(
-            has_impact=False,
-            summary=(
-                "No impact identified because no affected products were "
-                "successfully mapped to company data."
-            ),
-            affected_products=tuple(),
-            affected_shipments=tuple(),
-            inventory_impacts=tuple(),
-            affected_orders=tuple(),
-            total_orders_at_risk=0,
-            total_units_at_risk=0,
-            total_order_value_at_risk=0.0,
-            evidence=(
-                _make_evidence(
-                    source_type="resolution",
-                    source_id="products-unresolved",
-                    description=(
-                        "No affected products could be deterministically "
-                        "mapped to the company's database."
+    if is_warehouse_disruption:
+        warehouse = disruption.warehouse
+        if warehouse is None:
+            return ImpactAssessment(
+                has_impact=False,
+                summary="No impact identified because the warehouse could not be mapped to company data.",
+                affected_products=(), affected_shipments=(),
+                inventory_impacts=(), affected_orders=(),
+                total_orders_at_risk=0, total_units_at_risk=0,
+                total_order_value_at_risk=0.0, evidence=(),
+            )
+
+        warehouse_id = warehouse.entity_id
+        if warehouse_id is None:
+            return ImpactAssessment(
+                has_impact=False,
+                summary="No impact identified because the warehouse ID could not be resolved.",
+                affected_products=(), affected_shipments=(),
+                inventory_impacts=(), affected_orders=(),
+                total_orders_at_risk=0, total_units_at_risk=0,
+                total_order_value_at_risk=0.0, evidence=(),
+            )
+
+        inventory_impacts = _find_warehouse_inventory_impacts(warehouse_id)
+        affected_shipments = _find_warehouse_shipments(disruption)
+        orders = _find_warehouse_orders(warehouse_id)
+
+        product_ids.update(
+            inventory.product_id for inventory in inventory_impacts
+        )
+        product_ids.update(
+            shipment.product_id for shipment in affected_shipments
+        )
+        product_ids.update(
+            str(order.get("product_id"))
+            for order in orders
+            if order.get("product_id")
+        )
+    else:
+        if not product_ids:
+            return ImpactAssessment(
+                has_impact=False,
+                summary=(
+                    "No impact identified because no affected products were "
+                    "successfully mapped to company data."
+                ),
+                affected_products=tuple(),
+                affected_shipments=tuple(),
+                inventory_impacts=tuple(),
+                affected_orders=tuple(),
+                total_orders_at_risk=0,
+                total_units_at_risk=0,
+                total_order_value_at_risk=0.0,
+                evidence=(
+                    _make_evidence(
+                        source_type="resolution",
+                        source_id="products-unresolved",
+                        description=(
+                            "No affected products could be deterministically "
+                            "mapped to the company's database."
+                        ),
                     ),
                 ),
-            ),
-        )
+            )
 
     # ---------------------------------------------------------------
     # Trace supply chain
     # ---------------------------------------------------------------
 
-    affected_shipments = _find_affected_shipments(
-        disruption
-    )
+    if not is_warehouse_disruption:
+        affected_shipments = _find_affected_shipments(
+            disruption
+        )
 
-    inventory_impacts = _find_inventory_impacts(
-        product_ids
-    )
+        inventory_impacts = _find_inventory_impacts(
+            product_ids
+        )
 
-    orders = _find_affected_orders(
-        product_ids
-    )
+        orders = _find_affected_orders(
+            product_ids
+        )
 
     # ---------------------------------------------------------------
     # Calculate product impact
@@ -1179,8 +1413,11 @@ def assess_impact(
 )
 
     has_impact = (
+    total_orders_at_risk > 0
+    or (
         len(affected_shipments) > 0
-        and total_orders_at_risk > 0
+        and is_warehouse_disruption
+    )
     )
 
     # ---------------------------------------------------------------
