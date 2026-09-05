@@ -7,6 +7,7 @@ from backend.database import (
     get_product,
     get_product_by_name,
     get_shipments,
+    get_shipment,
     get_supplier,
     get_supplier_by_name,
     get_warehouse,
@@ -87,6 +88,7 @@ class ResolvedDisruption:
                 product.to_dict()
                 for product in self.products
             ],
+            "delay_days": self.delay_days,
             "warehouse": (
                 self.warehouse.to_dict()
                 if self.warehouse
@@ -404,7 +406,7 @@ def resolve_disruption(
     shipment_entities: list[EntityMatch] = []
 
     for shipment_id in disruption.affected_shipments:
-        shipment = get_shipments(shipment_id)
+        shipment = get_shipment(shipment_id)
 
         if shipment is None:
             shipment_entities.append(

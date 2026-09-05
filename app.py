@@ -69,7 +69,6 @@ def home():
 
 @app.get("/static/{filename}")
 def static_files(filename: str):
-
     allowed_files = {
         "style.css": FRONTEND_DIR / "style.css",
         "app.js": FRONTEND_DIR / "app.js",
@@ -144,13 +143,9 @@ def analyze(request: AnalyzeRequest):
 
                 "event": event.model_dump(),
 
-                "resolution": (
-                    resolved.to_dict()
-                ),
+                "resolution": resolved.to_dict(),
 
-                "impact": (
-                    impact.to_dict()
-                ),
+                "impact": impact.to_dict(),
 
                 "response_options": [],
 
@@ -161,21 +156,17 @@ def analyze(request: AnalyzeRequest):
         # 5. Generate response options.
         # ----------------------------------------------------
 
-        response_options = (
-            generate_response_options(
-                impact
-            )
+        response_options = generate_response_options(
+            impact
         )
 
         # ----------------------------------------------------
         # 6. Select recommendation.
         # ----------------------------------------------------
 
-        recommendation = (
-            recommend_response(
-                impact,
-                response_options,
-            )
+        recommendation = recommend_response(
+            impact,
+            response_options,
         )
 
         # ----------------------------------------------------
@@ -183,34 +174,28 @@ def analyze(request: AnalyzeRequest):
         # ----------------------------------------------------
 
         return {
-
             "success": True,
 
             "notice": request.notice,
 
-            "event": (
-                event.model_dump()
-            ),
+            "event": event.model_dump(),
 
-            "resolution": (
-                resolved.to_dict()
-            ),
+            "resolution": resolved.to_dict(),
 
-            "impact": (
-                impact.to_dict()
-            ),
+            "impact": impact.to_dict(),
 
             "response_options": [
                 option.to_dict()
                 for option in response_options
             ],
 
-            "recommendation": (
-                recommendation.to_dict()
-            ),
+            "recommendation": recommendation.to_dict(),
         }
 
     except Exception as exc:
+        import traceback
+
+        traceback.print_exc()
 
         raise HTTPException(
             status_code=500,
@@ -226,6 +211,7 @@ def analyze(request: AnalyzeRequest):
 # ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(
