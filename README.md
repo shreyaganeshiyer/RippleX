@@ -1,704 +1,175 @@
 # RippleX
 
-TRACK_ID=PS08
+**Enterprise Supply Chain Disruption Response Engine**  
+*Hackathon Track PS8: Supply Chain — Disruption Response Assistant*
 
-RippleX — AI Supply Chain Disruption Command Center
+---
 
-See the ripple. Stop the disruption.
+## Overview
 
-RippleX is an AI-powered supply chain disruption response assistant that converts messy, unstructured disruption notices into a traceable, quantified impact assessment and recommended response plan.
+Modern supply chain disruptions rarely surface as structured data. Incidents arrive through disparate, unstructured channels—such as vendor emails, logistics alerts, and freight carrier updates. Without unique system keys or cross-referenced line items, supply chain teams spend hours manually assessing blast radius, inventory levels, and order fulfillment risks.
 
-It helps distributors answer:
+**RippleX** unifies natural-language incident ingestion with deterministic relational supply chain modeling. By separating language comprehension from transactional accounting, RippleX enables operators to evaluate downstream exposure, prioritize pending customer obligations, and explore evaluated trade-offs in real time.
 
-What happened? What does it affect? Which customers are at risk? How urgent are they? What can we do about it?
+---
 
-⸻
+## Core System Architecture
 
-TRACK_ID=PS6
+RippleX enforces a strict pipeline to guarantee data integrity and operational auditability:
 
-Hackathon Track: Supply Chain — Disruption Response Assistant
-Project: RippleX
-Architecture: Python + FastAPI + SQLite + Gemini API
-AI Provider: Google Gemini
+1. **Ingestion & Natural Language Parsing:** Google Gemini extracts operational entities, location references, and incident parameters from raw text notices.
+2. **Deterministic Entity Resolution:** The extraction payload is validated against relational records. Ambiguous or missing entities trigger manual intervention flags rather than inferred records.
+3. **Deterministic Impact Analysis:** Python and SQLite traverse the dependency graph—from inbound logistics down to individual customer line items—to calculate exposure.
+4. **Mitigation Strategy Formulation:** The system analyzes viable response paths (e.g., inventory reallocation, split-shipments, expedited transit).
+5. **Decision Synthesis:** Recommendations rank mitigation paths based on cost, delivery variance, and operational feasibility.
+6. **Command Center Visualization:** All findings are published to an auditable operator console backed by clear chain-of-evidence references.
 
-⸻
+---
 
-1. Problem
+## Architectural Principle: AI vs. Deterministic Execution
 
-Supply chain disruptions rarely arrive as clean structured data.
+To prevent Large Language Model hallucinations from corrupting inventory accounting and delivery schedules, RippleX strictly isolates cognitive comprehension from arithmetic execution.
 
-A distributor may receive a message such as:
+| Operational Domain | Engine | Functional Responsibility |
+| :--- | :--- | :--- |
+| **Notice Interpretation** | Google Gemini | Extracts event classification, entity mentions, durations, and confidence levels. |
+| **Entity Validation** | Relational Database | Verifies and maps textual entities against registered master records. |
+| **Inventory & Shortage Analysis** | Python Runtime | Calculates physical on-hand stock, safety stock reserves, and facility-isolated shortfalls. |
+| **Financial Exposure** | Python Runtime | Computes total contract value and units at risk based on master data. |
+| **Delivery Date Adjustments** | Python Engine | Computes revised fulfillment dates via programmatic date arithmetic. |
+| **Action Contextualization** | Google Gemini | Generates readable strategic summaries and operational trade-off narratives. |
 
-“ABC Components Bangalore has announced a production halt that will delay shipments of X-200 and X-300 by 10 days.”
+---
 
-The message may contain no internal IDs and may use ambiguous product or location names.
+## Core Capabilities
 
-The real challenge is determining the downstream business impact:
+* **Unstructured Notice Ingestion:** Parses incoming unstructured text without requiring standardized input forms.
+* **Strict Entity Resolution:** Confirms the existence of suppliers, locations, purchase orders, and SKUs before downstream calculation.
+* **Multi-Tier Graph Tracing:** Traces dependencies across the fulfillment chain: `Supplier → Inbound PO → Distribution Center → Stock Allocation → Customer Order`.
+* **Facility-Isolated Inventory Auditing:** Evaluates buffer quantities strictly at the individual warehouse level to avoid false assumptions regarding multi-site availability.
+* **Deterministic Order Prioritization:** Sorts affected customer line items using business heuristics: contractual SLA, customer account tier, order value, and unit exposure.
+* **Zero-Impact Detection:** Accurately distinguishes critical alerts from noise. If an incident affects non-critical lines or well-buffered SKUs, RippleX reports **No Current Business Impact**.
+* **Auditable Evidence Chains:** Displays transparent, end-to-end operational lineage behind every flagged shortage and suggested delivery revision.
 
-* Which supplier is affected?
-* Which products or shipments are involved?
-* Where is the affected inventory?
-* Which pending customer orders depend on that stock?
-* How many units are at risk?
-* Which customers should be handled first?
-* What response options are available?
-* What are the trade-offs between those options?
-* Is the disruption actually relevant to the distributor’s current business?
+---
 
-⸻
+## Command Center Workflow
 
-2. Solution
+The user interface guides operators through five distinct operational phases:
 
-RippleX creates a complete disruption-response workflow:
+* **01 — Understand:** Analyzes the core incident facts (event type, primary supplier, location, disruption duration, and extraction confidence).
+* **02 — Trace:** Identifies all impacted supply chain nodes (purchase orders, transit carriers, and receiving distribution centers).
+* **03 — Customer Impact:** Displays a ranked register of affected customer orders, shortage volumes, updated delivery dates, and financial exposure.
+* **04 — Response Options:** Compares viable remediation strategies, detailing cost implications, speed, and customer impact.
+* **05 — Recommendation:** Delivers an actionable course of action for operator sign-off.
 
-Unstructured Disruption Notice
-            │
-            ▼
-     Gemini Extraction
-            │
-            ▼
-     Entity Resolution
-            │
-            ▼
-  Deterministic Impact Engine
-            │
-            ├── Shipments
-            ├── Inventory
-            ├── Customer Orders
-            └── Shortages
-            │
-            ▼
-   Response Option Engine
-            │
-            ▼
- Recommendation Engine
-            │
-            ▼
- Evidence-Backed Command Center
+---
 
-The key design principle is:
+## Technology Stack
 
-Gemini interprets the disruption. Python and the database determine the business impact.
+* **Application Runtime:** Python 3.10+
+* **API Layer:** FastAPI
+* **Data Storage:** SQLite
+* **Language Model Integration:** Google Gemini API
+* **Data Validation:** Pydantic v2
+* **Configuration Management:** python-dotenv
+* **Frontend:** HTML5, CSS3, JavaScript (ES6)
 
-This prevents the LLM from inventing quantities, shortages, orders, or financial impact.
+---
 
-⸻
-
-3. Key Features
-
-🧠 Unstructured Notice Understanding
-
-RippleX accepts natural-language disruption notices instead of requiring structured forms.
-
-Gemini extracts relevant information such as:
-
-* Event type
-* Supplier
-* Location
-* Products
-* Shipments
-* Warehouse
-* Carrier
-* Delay duration
-* Confidence
-
-⸻
-
-🔎 Deterministic Entity Resolution
-
-Extracted entities are matched against the company’s actual database.
-
-RippleX verifies:
-
-* Suppliers
-* Products
-* Shipments
-* Warehouses
-
-Unknown or ambiguous entities are not guessed.
-
-Instead, RippleX can escalate the case for human review.
-
-⸻
-
-🌊 Supply Chain Impact Tracing
-
-RippleX traces a disruption through:
-
-Supplier
-   ↓
-Shipment
-   ↓
-Warehouse
-   ↓
-Inventory
-   ↓
-Customer Orders
-
-This allows the system to identify the actual downstream ripple instead of simply reporting that “a supplier is delayed.”
-
-⸻
-
-📦 Warehouse-Level Inventory Analysis
-
-Inventory is evaluated at the warehouse level.
-
-Stock in one warehouse is not automatically assumed to satisfy orders assigned to another warehouse.
-
-This prevents false assumptions about available supply.
-
-⸻
-
-👥 Customer Order Prioritization
-
-Affected orders are ranked using deterministic factors including:
-
-* Customer order priority
-* Promised delivery date
-* Order value
-* Quantity exposed
-
-RippleX identifies which orders require attention first.
-
-⸻
-
-📅 Revised Delivery Dates
-
-When a disruption includes a deterministic delay duration, RippleX calculates:
-
-Revised Delivery Date
-=
-Promised Delivery Date
-+
-Disruption Delay
-
-Date arithmetic is performed by Python rather than the LLM.
-
-⸻
-
-💰 Financial Exposure
-
-RippleX calculates:
-
-* Units at risk
-* Orders at risk
-* Order value at risk
-
-The calculations are derived from database records.
-
-⸻
-
-⚖️ Response Options & Trade-offs
-
-RippleX presents possible responses such as:
-
-* Expedite supply
-* Part-ship an order
-* Reallocate available inventory
-* Inform the customer
-* Prioritize critical orders
-
-Each option can be evaluated based on operational trade-offs such as:
-
-* Cost
-* Customer impact
-* Speed
-* Supply availability
-
-⸻
-
-🎯 Recommendation
-
-RippleX recommends a response based on the calculated impact and available options.
-
-The system recommends actions but does not automatically execute them.
-
-Human decision-makers remain in control.
-
-⸻
-
-🧾 Evidence & Traceability
-
-Important impact claims can be traced back to their underlying records.
-
-For example:
-
-Order ORD101
-      ↓
-Requires 40 X-200 units
-      ↓
-WH001 has insufficient available inventory
-      ↓
-25 units available
-      ↓
-15 units exposed
-
-This makes the reasoning auditable rather than a black-box AI response.
-
-⸻
-
-4. Handling Uncertainty
-
-RippleX is designed to avoid hallucinating business impact.
-
-Unknown entities
-
-If a supplier or product cannot be confidently matched to company data, RippleX does not invent a match.
-
-Ambiguous products
-
-For example:
-
-“X-series products will be delayed.”
-
-RippleX does not automatically assume that this means X-200, X-300, and X-400.
-
-It flags the ambiguity for human review.
-
-No-impact disruptions
-
-An alarming disruption does not automatically mean business impact.
-
-If the affected entity cannot be connected to active shipments, inventory exposure, or pending orders, RippleX can return:
-
-NO CURRENT BUSINESS IMPACT
-
-This is important because a disruption should only be considered a business problem when it actually affects the company’s current operations.
-
-⸻
-
-5. Architecture
-
-                    ┌─────────────────────┐
-                    │  Disruption Notice  │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   Gemini Parser     │
-                    │                     │
-                    │ Extract structured  │
-                    │ disruption facts    │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ Entity Resolver     │
-                    │                     │
-                    │ Match against       │
-                    │ company data        │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ Deterministic       │
-                    │ Impact Engine       │
-                    │                     │
-                    │ Inventory           │
-                    │ Shipments           │
-                    │ Orders              │
-                    │ Shortages           │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ Response Engine     │
-                    │                     │
-                    │ Evaluate possible   │
-                    │ response strategies │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ Recommendation      │
-                    │ Engine              │
-                    └──────────┬──────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │ RippleX Command     │
-                    │ Center              │
-                    └─────────────────────┘
-
-⸻
-
-6. Separation of AI and Deterministic Logic
-
-A major architectural principle of RippleX is keeping AI reasoning separate from business truth.
-
-Gemini handles
-
-* Natural-language interpretation
-* Disruption classification
-* Entity extraction
-* Ambiguous language
-* Human-readable explanations
-* Recommendation reasoning
-
-Python + SQLite handle
-
-* Entity verification
-* Inventory quantities
-* Shipment quantities
-* Pending orders
-* Shortage calculations
-* Order prioritization
-* Order value at risk
-* Revised delivery dates
-* Evidence generation
-
-Therefore:
-
-The LLM never decides how much inventory exists or how many orders are actually at risk.
-
-⸻
-
-7. Project Structure
+## Repository Structure
 
 RippleX/
-│
-├── README.md
-├── app.py
-├── requirements.txt
-│
+├── app.py                      # FastAPI application entry point and routes
+├── requirements.txt             # Python runtime dependencies
 ├── backend/
-│   ├── database.py
-│   ├── disruption_parser.py
-│   ├── entity_resolver.py
-│   ├── impact_engine.py
-│   ├── response_engine.py
-│   └── recommendation_engine.py
-│
+│   ├── database.py              # SQLite connection and query layer
+│   ├── disruption_parser.py     # Gemini extraction prompts and structured schemas
+│   ├── entity_resolver.py       # Deterministic database entity resolution
+│   ├── impact_engine.py         # Relational graph traversal and shortage calculations
+│   ├── response_engine.py       # Strategy generator and trade-off evaluator
+│   └── recommendation_engine.py # Decision synthesis engine
 ├── data/
-│   ├── seed.py
-│   └── ripplex.db
-│
+│   ├── seed.py                  # Seed script for realistic demo supply chain data
+│   └── ripplex.db               # SQLite database instance
 └── frontend/
-    ├── index.html
-    ├── style.css
-    └── app.js
+├── index.html               # Operator command center dashboard
+├── style.css                # UI design and responsive styles
+└── app.js                   # Client-side state and API interaction
 
-Components
 
-app.py
+---
 
-FastAPI application and API endpoints.
+## Getting Started
 
-disruption_parser.py
-
-Uses Gemini to convert an unstructured disruption notice into a structured disruption event.
-
-entity_resolver.py
-
-Deterministically maps extracted entities to company records.
-
-impact_engine.py
-
-Calculates the actual business impact using database data.
-
-response_engine.py
-
-Generates possible response strategies and evaluates their trade-offs.
-
-recommendation_engine.py
-
-Produces the recommended course of action.
-
-database.py
-
-SQLite data access layer.
-
-seed.py
-
-Creates the demonstration supply-chain dataset.
-
-frontend/
-
-RippleX command-center interface.
-
-⸻
-
-8. Technology Stack
-
-Layer	Technology
-Backend	Python
-API	FastAPI
-Database	SQLite
-LLM	Google Gemini API
-Data Validation	Pydantic
-Environment Configuration	python-dotenv
-Frontend	HTML, CSS, JavaScript
-Version Control	Git
-
-⸻
-
-9. Getting Started
-
-Prerequisites
-
-* Python 3.10+
+### Prerequisites
+* Python 3.10 or higher
 * Git
-* Gemini API key
+* Valid Google Gemini API key
 
-⸻
+### 1. Installation
+Clone the repository and set up a local environment:
 
-Clone the repository
-
-git clone <YOUR_GITHUB_REPOSITORY_URL>
+```bash
+git clone [https://github.com/your-org/RippleX.git](https://github.com/your-org/RippleX.git)
 cd RippleX
+Set up and activate a virtual environment:
 
-⸻
-
-Create a virtual environment
-
-macOS / Linux
-
+Bash
+# macOS / Linux
 python3 -m venv .venv
 source .venv/bin/activate
 
-Windows
-
+# Windows
 python -m venv .venv
 .venv\Scripts\activate
+Install dependencies:
 
-⸻
-
-Install dependencies
-
+Bash
 pip install -r requirements.txt
-
-⸻
-
-Configure Gemini
-
+2. Environment Configuration
 Create a .env file in the project root:
 
-GEMINI_API_KEY=your_gemini_api_key
+Code snippet
+GEMINI_API_KEY="your-gemini-api-key-here"
+3. Database Initialization
+Seed the SQLite database with the baseline supply chain dataset:
 
-The API key must not be committed to Git.
+Bash
+python data/seed.py
+4. Running the Service
+Start the local FastAPI development server:
 
-⸻
-
-Run the application
-
+Bash
 uvicorn app:app --reload --port 8000
-
-Open:
-
+Access the Command Center at:
 http://127.0.0.1:8000
 
-⸻
+Verification Scenarios
+Scenario 1: Active Supply Disruption
+Input:
 
-10. Demo Scenarios
+"ABC Components Bangalore has announced a production halt that will delay shipments of X-200 and X-300 by 10 days."
 
-Scenario 1 — Real Supplier Disruption
+System Action: Resolves vendor and product records, verifies inbound shipment schedules, detects warehouse shortages, ranks impacted accounts by SLA, and recommends targeted mitigation.
 
-Use:
+Scenario 2: No Operational Impact
+Input:
 
-ABC Components Bangalore has announced a production halt that will delay shipments of X-200 and X-300 by 10 days. Assess the downstream impact on inventory and pending customer orders, rank the affected orders by urgency, and recommend the best response.
+"ABC Components Bangalore has announced a production halt affecting X-300 shipments by 10 days."
 
-This demonstrates the complete RippleX workflow:
+System Action: Validates that warehouse inventory meets buffer thresholds and that no pending orders rely on incoming deliveries during the affected window. Flags incident as No Current Business Impact.
 
-Notice
- ↓
-Supplier resolution
- ↓
-Product resolution
- ↓
-Shipment tracing
- ↓
-Inventory analysis
- ↓
-Customer impact
- ↓
-Order prioritization
- ↓
-Response options
- ↓
-Recommendation
+Scenario 3: Ambiguous Incident Notice
+Input:
 
-⸻
+"ABC Components Bangalore has announced that its X-series products will be delayed by 7 days."
 
-Scenario 2 — No Current Business Impact
+System Action: Flags "X-series" as an ambiguous entity. Stops downstream automated processing and requests operator clarification instead of guessing affected SKUs.
 
-Use:
+System Governance & Guardrails
+No Synthetic Entities: The system does not guess or interpolate unknown vendor names, locations, or product IDs.
 
-ABC Components Bangalore has announced a production halt affecting X-300 shipments by 10 days. Assess whether there is any current business impact and explain why.
+Deterministic Quantities: Numeric fields—including on-hand balances, units at risk, and contract revenue—are sourced exclusively from database records.
 
-This demonstrates that RippleX does not automatically treat every disruption as a customer-impacting event.
-
-⸻
-
-Scenario 3 — Ambiguous Disruption
-
-Use:
-
-ABC Components Bangalore has announced that its X-series products will be delayed by 7 days. Assess the impact and recommend a response.
-
-RippleX should recognize that X-series is not a verified product entity and avoid inventing which products are affected.
-
-⸻
-
-11. Command Center Workflow
-
-The UI is organized around the operational questions a supply-chain manager needs answered.
-
-01 — UNDERSTAND
-
-What happened?
-
-* Event type
-* Supplier
-* Location
-* Products
-* Delay
-* Confidence
-
-02 — TRACE
-
-What does it touch?
-
-* Shipments
-* Warehouses
-* Inventory
-* Products
-
-03 — CUSTOMER IMPACT
-
-Who is affected?
-
-* Orders at risk
-* Units at risk
-* Shortages
-* Customers
-* Delivery dates
-* Order value at risk
-* Urgency
-
-04 — RESPONSE
-
-What can we do?
-
-* Expedite
-* Reallocate
-* Part-ship
-* Customer communication
-* Other response strategies
-
-05 — RECOMMENDATION
-
-What should we do first?
-
-RippleX presents the recommended response together with the reasoning and trade-offs.
-
-⸻
-
-12. Data Model
-
-The demonstration database contains:
-
-* Suppliers
-* Products
-* Warehouses
-* Inventory
-* Shipments
-* Customer orders
-
-The data is intentionally structured to demonstrate realistic disruption propagation across multiple stages of the supply chain.
-
-⸻
-
-13. Safety & Guardrails
-
-RippleX follows several important guardrails:
-
-No hallucinated entities
-
-Unknown suppliers, products, shipments, or warehouses are not silently mapped.
-
-No invented impact
-
-Business impact must come from verified company data.
-
-No LLM calculations
-
-Critical numerical calculations are performed deterministically.
-
-No automatic actions
-
-RippleX recommends actions but does not execute:
-
-* Shipment changes
-* Inventory transfers
-* Customer communications
-* Purchase orders
-
-Human review
-
-Ambiguous or unresolved cases can be escalated rather than guessed.
-
-⸻
-
-14. Why RippleX?
-
-Traditional supply-chain workflows often require an operator to manually connect several pieces of information:
-
-Email
- ↓
-Supplier
- ↓
-Shipment spreadsheet
- ↓
-Warehouse inventory
- ↓
-Order system
- ↓
-Customer priority
- ↓
-Manual decision
-
-RippleX compresses this investigation into one workflow:
-
-Messy Notice
-     ↓
-RippleX
-     ↓
-Traceable Impact
-     ↓
-Ranked Customers
-     ↓
-Response Options
-     ↓
-Recommended Action
-
-The value is not simply generating an AI answer.
-
-The value is connecting an unstructured disruption to verified operational data and turning it into a decision-ready response.
-
-⸻
-
-15. Future Improvements
-
-Potential production extensions include:
-
-* Live ERP/WMS/TMS integrations
-* Real-time shipment tracking
-* Multi-disruption correlation
-* Supplier reliability history
-* Historical disruption learning
-* More sophisticated optimization of inventory reallocation
-* Cost-aware response optimization
-* Automated notification workflows with human approval
-* Role-based dashboards for supply-chain teams
-
-⸻
-
-16. Project Philosophy
-
-RippleX is built around one principle:
-
-AI should help people understand and decide — not invent operational truth.
-
-The system combines the language understanding capabilities of Gemini with deterministic business logic and traceable company data.
-
-See the ripple. Stop the disruption.
+Human-in-the-Loop: System recommendations do not mutate database states, initiate vendor orders, or contact customers without explicit operator approval.
