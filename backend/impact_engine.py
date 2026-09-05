@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import date
+from datetime import date, timedelta
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
@@ -104,6 +104,7 @@ class AffectedOrder:
     warehouse_id: str
     warehouse_name: str
     promised_date: str
+    revised_delivery_date: Optional[str]
     priority: str
     order_value: float
     order_value_at_risk: float
@@ -875,6 +876,7 @@ def _calculate_urgency_score(order: dict[str, Any]) -> float:
 def _calculate_order_impacts(
     orders: list[dict[str, Any]],
     product_impacts: list[ProductImpact],
+    delay_days: Optional[int] = None,
 ) -> list[AffectedOrder]:
     """
     Determine which individual pending orders are exposed.
@@ -1139,6 +1141,20 @@ def _calculate_order_impacts(
                     ),
                 ),
             )
+            promised_date = str(
+                order.get("promised_date") or ""
+            )
+
+            revised_delivery_date: Optional[str] = None
+
+            if promised_date and delay_days and delay_days > 0:
+                try:
+                    revised_delivery_date = (
+                        date.fromisoformat(promised_date)
+                        + timedelta(days=delay_days)
+                    ).isoformat()
+                except ValueError:
+                    revised_delivery_date = None
 
             affected_orders.append(
                 AffectedOrder(
@@ -1149,9 +1165,8 @@ def _calculate_order_impacts(
                     quantity=quantity,
                     warehouse_id=warehouse_id,
                     warehouse_name=warehouse_name,
-                    promised_date=str(
-                        order.get("promised_date") or ""
-                    ),
+                    promised_date=promised_date,
+                    revised_delivery_date=revised_delivery_date,
                     priority=str(
                         order.get("priority") or ""
                     ),
@@ -1392,6 +1407,7 @@ def assess_impact(
     affected_orders = _calculate_order_impacts(
         orders=orders,
         product_impacts=product_impacts,
+        delay_days=getattr(disruption, "delay_days", None),
     )
 
     # ---------------------------------------------------------------

@@ -414,7 +414,6 @@ function renderImpactChain(
 // ============================================================
 // ORDERS
 // ============================================================
-
 function renderOrders(orders) {
 
     const tbody = document.getElementById(
@@ -425,7 +424,7 @@ function renderOrders(orders) {
 
         tbody.innerHTML = `
             <tr>
-                <td colspan="8">
+                <td colspan="9">
                     No affected orders.
                 </td>
             </tr>
@@ -475,6 +474,16 @@ function renderOrders(orders) {
                     ${formatNumber(
                         order.urgency_score
                     )}
+                </td>
+
+                <td>
+                    ${
+                        order.revised_delivery_date
+                            ? `<strong>${escapeHtml(
+                                order.revised_delivery_date
+                            )}</strong>`
+                            : "—"
+                    }
                 </td>
 
                 <td>
