@@ -565,6 +565,17 @@ def _generate_customer_notification_option(
 # REALLOCATION
 # ============================================================
 
+def _row_to_dict(row: Any) -> dict[str, Any]:
+    if row is None:
+        return {}
+
+    if isinstance(row, dict):
+        return dict(row)
+
+    try:
+        return dict(row)
+    except (TypeError, ValueError):
+        return {}
 
 def _build_shortage_by_product_warehouse(
     affected_orders: list,
@@ -672,7 +683,7 @@ def _find_reallocation_opportunities(
             # not just orders already at risk. Otherwise protected source
             # orders could be incorrectly treated as transferable surplus.
             source_pending_demand = sum(
-                int(order["quantity"] or 0)
+                int(_row_to_dict(order).get("quantity") or 0)
                 for order in get_orders(
                     product_id=product_id,
                     warehouse_id=inventory.warehouse_id,

@@ -149,21 +149,21 @@ Verification Scenarios
 Scenario 1: Active Supply Disruption
 Input:
 
-"ABC Components Bangalore has announced a production halt that will delay shipments of X-200 and X-300 by 10 days."
+"ABC Components  has announced a production halt that will delay shipments of X-200 and X-300 by 10 days."
 
 System Action: Resolves vendor and product records, verifies inbound shipment schedules, detects warehouse shortages, ranks impacted accounts by SLA, and recommends targeted mitigation.
 
 Scenario 2: No Operational Impact
 Input:
 
-"ABC Components Bangalore has announced a production halt affecting X-300 shipments by 10 days."
+"ABC Components has announced a production halt affecting X-300 shipments by 10 days."
 
 System Action: Validates that warehouse inventory meets buffer thresholds and that no pending orders rely on incoming deliveries during the affected window. Flags incident as No Current Business Impact.
 
 Scenario 3: Ambiguous Incident Notice
 Input:
 
-"ABC Components Bangalore has announced that its X-series products will be delayed by 7 days."
+"ABC Components  has announced that its X-series products will be delayed by 7 days."
 
 System Action: Flags "X-series" as an ambiguous entity. Stops downstream automated processing and requests operator clarification instead of guessing affected SKUs.
 

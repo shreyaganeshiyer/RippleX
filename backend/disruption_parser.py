@@ -44,11 +44,10 @@ class DisruptionEvent(BaseModel):
     )
 
     supplier_name: Optional[str] = Field(
-        default=None,
-        description=(
-            "Supplier company explicitly mentioned in the notice."
-        ),
-    )
+    default=None,
+    description="Supplier/company name ONLY, without city or geographic location. "
+                "For example, 'ABC Components Bangalore' means supplier_name='ABC Components'."
+        )
 
     carrier_name: Optional[str] = Field(
         default=None,
@@ -59,10 +58,8 @@ class DisruptionEvent(BaseModel):
     )
 
     location: Optional[str] = Field(
-        default=None,
-        description=(
-            "Physical location explicitly mentioned in the notice."
-        ),
+    default=None,
+    description="Geographic location/city mentioned separately from the supplier name."
     )
 
     warehouse_name: Optional[str] = Field(
@@ -270,6 +267,17 @@ IMPORTANT ENTITY RULES:
 12. CONFIDENCE
     Return a value between 0 and 1 representing confidence
     in the extraction itself.
+
+13.SUPPLIER NAME AND LOCATION:
+- supplier_name must contain ONLY the supplier/company name as it appears in the database.
+- location must contain the geographic location separately.
+- Do NOT include the city/location as part of supplier_name.
+- Example:
+  "ABC Components Bangalore" → supplier_name = "ABC Components", location = "Bangalore"
+  "Global Parts Chennai" → supplier_name = "Global Parts", location = "Chennai"
+  "Nova Supplies Pune" → supplier_name = "Nova Supplies", location = "Pune"
+  "Prime Manufacturing Mumbai" → supplier_name = "Prime Manufacturing", location = "Mumbai"
+  "Vertex Industries Delhi" → supplier_name = "Vertex Industries", location = "Delhi"
 
 DISRUPTION NOTICE:
 {cleaned_notice}
